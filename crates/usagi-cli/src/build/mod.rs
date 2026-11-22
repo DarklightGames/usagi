@@ -20,6 +20,7 @@
 
 pub mod ini;
 mod manifest;
+mod progress;
 mod ucc;
 mod version;
 
@@ -32,10 +33,11 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use walkdir::WalkDir;
 
 use crate::check::{self, CheckOptions};
-use crate::cli::OutputFormat;
+use crate::cli::{OutputFormat, ProgressChoice};
 use crate::output;
 use ini::{Ini, Op};
 use manifest::Manifest;
+use progress::Reporter;
 
 /// The file that records which packages are up to date, in the mod folder
 /// or the game directory.
@@ -61,6 +63,8 @@ pub struct Options {
     pub jobs: usize,
     pub verbose: bool,
     pub color: bool,
+    /// Whether to show live progress bars.
+    pub progress: ProgressChoice,
     pub wine: String,
     pub version: Option<String>,
     pub version_class: Option<PathBuf>,
@@ -302,7 +306,9 @@ pub fn run(options: &Options) -> Result<bool, String> {
         None => game_target(&root, sys_dir, options)?,
     };
 
-    println!("Checking for out-of-date packages...");
+    let mut reporter = progress::reporter(options.progress, options.verbose, options.color);
+    let reporter = reporter.as_mut();
+    reporter.finding();
     let packages = find_out_of_date(&root, &target, &locks, options)?;
     check_locks(&packages, &target)?;
     let to_compile: Vec<&Package> = packages
@@ -321,18 +327,15 @@ pub fn run(options: &Options) -> Result<bool, String> {
     if to_compile.is_empty() {
         target.manifest.default_ini_crc = target.default_ini_crc;
         target.manifest.write(&target.manifest_path)?;
-        print_summary(0, 0, up_to_date, options.color);
+        reporter.finish(0, 0, up_to_date, None);
         return Ok(true);
     }
 
-    if options.check && !check_sources(&to_compile, options)? {
+    reporter.plan(&target.label, &to_compile, up_to_date);
+    if options.check && !check_sources(&to_compile, options, reporter)? {
         return Ok(false);
     }
-
-    print_header(&format!(" Build started for {} ", target.label), None);
-    for package in &to_compile {
-        println!("{}: {}", package.name, package.status.describe());
-    }
+    reporter.compile_started();
 
     // Remove the packages being rebuilt, so UCC compiles them.
     let sys_dir = target.sys_dir.clone();
@@ -345,13 +348,13 @@ pub fn run(options: &Options) -> Result<bool, String> {
         }
     }
 
-    let ucc = ucc::Ucc::find(&sys_dir, &options.wine, options.verbose, options.color)?;
+    let ucc = ucc::Ucc::find(&sys_dir, &options.wine)?;
     let mut make_args = vec!["Editor.MakeCommandlet".to_string()];
     make_args.extend(target.ucc_args.iter().cloned());
     if options.debug {
         make_args.push("-debug".to_string());
     }
-    let status = ucc.run_streaming(&make_args)?;
+    let status = ucc.run_streaming(&make_args, &mut |line| reporter.ucc_line(line))?;
 
     // Dumping localization overwrites UCC.log, which editors read for errors.
     let log_path = find_ci(&sys_dir, "UCC.log");
@@ -364,6 +367,7 @@ pub fn run(options: &Options) -> Result<bool, String> {
             compiled.push(*package);
         }
     }
+    reporter.compile_finished(&compiled);
 
     if target.dumpint {
         let changed: Vec<&str> = compiled
@@ -371,7 +375,11 @@ pub fn run(options: &Options) -> Result<bool, String> {
             .filter(|p| p.status == Status::Changed)
             .map(|p| p.name.as_str())
             .collect();
-        ucc.dumpint(&changed, &target.ucc_args, options.jobs)?;
+        if !changed.is_empty() {
+            let ticker = reporter.dumpint_started(changed.len());
+            let results = ucc.dumpint(&changed, &target.ucc_args, options.jobs, &ticker)?;
+            reporter.dumpint_finished(&results);
+        }
         for package in &to_compile {
             if let Some(path) = find_ci(&sys_dir, &format!("{}.int", package.name)) {
                 move_to(&path, target.out_dir.as_deref())?;
@@ -397,13 +405,8 @@ pub fn run(options: &Options) -> Result<bool, String> {
     target.manifest.write(&target.manifest_path)?;
 
     let failed = to_compile.len() - compiled.len();
-    if failed > 0 && !status.success() {
-        match status.code() {
-            Some(code) => println!("UCC exited with status {}", code),
-            None => println!("UCC was terminated"),
-        }
-    }
-    print_summary(compiled.len(), failed, up_to_date, options.color);
+    let ucc_failed = (failed > 0 && !status.success()).then_some(status);
+    reporter.finish(compiled.len(), failed, up_to_date, ucc_failed);
     Ok(failed == 0)
 }
 
@@ -743,7 +746,11 @@ fn check_locks(packages: &[Package], target: &Target) -> Result<(), String> {
 
 /// Parses the sources of the packages to compile, and prints the files that
 /// don't parse. Returns whether every file parsed.
-fn check_sources(packages: &[&Package], options: &Options) -> Result<bool, String> {
+fn check_sources(
+    packages: &[&Package],
+    options: &Options,
+    reporter: &mut dyn Reporter,
+) -> Result<bool, String> {
     let files: Vec<PathBuf> = packages.iter().flat_map(|p| p.files.clone()).collect();
     let never = |_: &Path, _| false;
     let check_options = CheckOptions {
@@ -754,10 +761,12 @@ fn check_sources(packages: &[&Package], options: &Options) -> Result<bool, Strin
         is_enabled: &never,
         jobs: options.jobs,
     };
-    let reports: Vec<_> = check::check_all(&files, &check_options)?
+    let ticker = reporter.check_started(files.len());
+    let reports: Vec<_> = check::check_all_with(&files, &check_options, &|| ticker.tick())?
         .into_iter()
         .filter(|r| r.outcome.is_failure())
         .collect();
+    reporter.check_finished(reports.len(), files.len());
     if reports.is_empty() {
         return Ok(true);
     }
@@ -776,15 +785,6 @@ fn check_sources(packages: &[&Package], options: &Options) -> Result<bool, Strin
         if reports.len() == 1 { "file" } else { "files" }
     );
     Ok(false)
-}
-
-fn print_summary(succeeded: usize, failed: usize, up_to_date: usize, color: bool) {
-    let text = format!(
-        " Build: {} succeeded, {} failed, 0 skipped, {} up-to-date ",
-        succeeded, failed, up_to_date
-    );
-    let code = if failed == 0 { "92" } else { "91" };
-    print_header(&text, color.then_some(code));
 }
 
 #[cfg(test)]

@@ -404,9 +404,10 @@ fn fix_keeps_utf16() {
     assert_eq!(fs::read(dir.path().join("Foo.uc")).unwrap(), expected);
 }
 
-/// A fake UCC, run by `sh` in place of Wine. `make` "compiles" each package
-/// that isn't compiled yet, unless it has a `Broken.uc`, and logs what it
-/// compiled to `made.log`. With `-mod=`, the packages are the `+EditPackages`
+/// A fake UCC, run by `sh` in place of Wine. `make` logs a heading for each
+/// package, as the real one does, and "compiles" each one that isn't compiled
+/// yet (logging `Parsing` and `Compiling` for each class), unless it has a
+/// `Broken.uc`, and logs what it compiled to `made.log`. With `-mod=`, the packages are the `+EditPackages`
 /// of the mod's `Default.ini`, compiled ones are in the mod's System folder,
 /// and new ones are written to `System/`; with `-ini=`, the packages are that
 /// INI's `EditPackages`, all in `System/`. `dumpint` writes the package's
@@ -436,7 +437,11 @@ if [ "$cmd" = Editor.MakeCommandlet ]; then
     out=.
   fi
   for p in $list; do
+    printf -- '--------------------%s - Release--------------------\r\n' "$p"
     [ -f $out/$p.u ] && continue
+    echo "Analyzing..."
+    for f in ../$p/Classes/*.uc; do echo "Parsing $(basename "$f" .uc)"; done
+    for f in ../$p/Classes/*.uc; do echo "Compiling $(basename "$f" .uc)"; done
     if [ -e ../$p/Classes/Broken.uc ]; then
       echo "$p.uc(1) : Error, broken"
     else
@@ -584,6 +589,121 @@ fn build_retries_packages_that_failed() {
     let (code, out) = build(root, &[]);
     assert_eq!(code, 0, "{}", out);
     assert_eq!(made(root), "A\nB\nC\n");
+}
+
+/// Builds with the live progress view, as on a terminal.
+#[cfg(unix)]
+fn build_live(dir: &Path, args: &[&str], lang: &str) -> (i32, String) {
+    let output = usagi(dir)
+        .args(["build", "--color", "never", "--progress", "always"])
+        .args(args)
+        .env_remove("LC_ALL")
+        .env_remove("LC_CTYPE")
+        .env("LANG", lang)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    (output.status.code().unwrap(), stdout + &stderr)
+}
+
+#[cfg(unix)]
+#[test]
+fn build_shows_live_progress() {
+    let dir = game();
+    let root = dir.path();
+    let (code, out) = build_live(root, &[], "C.UTF-8");
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("usagi build mod: Mod"), "{}", out);
+    assert!(out.contains("(3 of 3 packages out of date)"), "{}", out);
+    assert!(out.contains("✓ Checked sources"), "{}", out);
+    assert!(out.contains("3 files"), "{}", out);
+    assert!(out.contains("✓ A "), "{}", out);
+    assert!(out.contains("1 class"), "{}", out);
+    assert!(out.contains("✓ Localization"), "{}", out);
+    assert!(out.contains("Build succeeded"), "{}", out);
+    assert!(out.contains("3 compiled · 0 up to date"), "{}", out);
+    // UCC's progress and the plain view's lines aren't shown.
+    assert!(!out.contains("Parsing A"), "{}", out);
+    assert!(!out.contains("Build started"), "{}", out);
+    assert_eq!(made(root), "A\nB\nC\n");
+
+    // With --verbose, UCC's output is shown as it comes.
+    fs::write(
+        root.join("C/Classes/C.uc"),
+        "class C extends B; // changed\n",
+    )
+    .unwrap();
+    let (code, out) = build_live(root, &["--verbose"], "C.UTF-8");
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("Compiling C"), "{}", out);
+    assert!(out.contains("1 compiled · 2 up to date"), "{}", out);
+
+    let (code, out) = build_live(root, &[], "C.UTF-8");
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("0 compiled · 3 up to date"), "{}", out);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_live_progress_collects_errors() {
+    let dir = game();
+    let root = dir.path();
+    fs::write(
+        root.join("A/Classes/Broken.uc"),
+        "class Broken extends Object;\n",
+    )
+    .unwrap();
+    // Without a UTF-8 locale, it draws with ASCII.
+    let (code, out) = build_live(root, &[], "C");
+    assert_eq!(code, 1, "{}", out);
+    assert!(out.contains("x A "), "{}", out);
+    assert!(out.contains("1 error"), "{}", out);
+    assert!(out.contains("+ B "), "{}", out);
+    // The errors are printed at the end, under their package.
+    let errors = out.find("-- A ---").expect(&out);
+    assert!(out[errors..].contains("A.uc(1) : Error, broken"), "{}", out);
+    assert!(out.contains("Build failed"), "{}", out);
+    assert!(
+        out.contains("2 compiled · 1 failed · 0 up to date"),
+        "{}",
+        out
+    );
+
+    // Files that don't parse stop the build before UCC runs.
+    fs::write(
+        root.join("B/Classes/B.uc"),
+        "class B extends A;\nfunction {\n",
+    )
+    .unwrap();
+    let (code, out) = build_live(root, &[], "C");
+    assert_eq!(code, 1, "{}", out);
+    assert!(out.contains("x Checked sources"), "{}", out);
+    assert!(out.contains("1 of 4 files didn't parse"), "{}", out);
+    assert!(out.contains("1 file didn't parse"), "{}", out);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_progress_setting() {
+    let dir = game();
+    let root = dir.path();
+    fs::write(
+        root.join("usagi.toml"),
+        "[build]\nmod = \"Mod\"\nwine = \"sh\"\nprogress = \"always\"\n",
+    )
+    .unwrap();
+    let (code, out) = build(root, &[]);
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("Build succeeded"), "{}", out);
+    fs::write(
+        root.join("C/Classes/C.uc"),
+        "class C extends B; // changed\n",
+    )
+    .unwrap();
+    let (code, out) = build(root, &["--progress", "never"]);
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("1 succeeded, 0 failed"), "{}", out);
 }
 
 #[cfg(unix)]

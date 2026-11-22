@@ -340,6 +340,15 @@ const STACK_SIZE: usize = 256 * 1024 * 1024;
 /// Checks `files` in parallel. Reports come back in the order of `files`,
 /// with each file's problems sorted by position.
 pub fn check_all(files: &[PathBuf], options: &CheckOptions) -> Result<Vec<FileReport>, String> {
+    check_all_with(files, options, &|| {})
+}
+
+/// `check_all`, calling `on_checked` (from any thread) as each file is done.
+pub fn check_all_with(
+    files: &[PathBuf],
+    options: &CheckOptions,
+    on_checked: &(dyn Fn() + Sync),
+) -> Result<Vec<FileReport>, String> {
     use rayon::prelude::*;
     panic::set_hook(Box::new(|_| {})); // panics are reported as problems
     let pool = rayon::ThreadPoolBuilder::new()
@@ -351,7 +360,11 @@ pub fn check_all(files: &[PathBuf], options: &CheckOptions) -> Result<Vec<FileRe
     let mut reports: Vec<FileReport> = pool.install(|| {
         files
             .par_iter()
-            .map(|path| check_file(path, options))
+            .map(|path| {
+                let report = check_file(path, options);
+                on_checked();
+                report
+            })
             .collect()
     });
     for report in &mut reports {

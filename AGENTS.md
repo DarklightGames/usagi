@@ -80,7 +80,8 @@ in the same change as the CLI, and add a test to
 `src/build/` holds the build command: `mod.rs` (the steps, in order, for a
 mod or for the game itself without one, and the `build.locked` checks),
 `ini.rs` (UE2 `.ini` files and how a mod's `Default.ini` changes the game's),
-`ucc.rs` (running UCC), `manifest.rs` (the `.usagi-build.toml` record) and
+`ucc.rs` (running UCC), `progress.rs` (what the build prints: plain lines,
+or live progress bars on a terminal, following UCC's output), `manifest.rs` (the `.usagi-build.toml` record) and
 `version.rs` (the generated version class). Its CLI tests run a fake
 `UCC.exe`, a shell script run by `sh` in place of Wine, that imitates what the
 real one does to the file system with `-mod=` and with `-ini=`, including its

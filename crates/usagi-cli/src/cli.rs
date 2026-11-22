@@ -378,6 +378,11 @@ pub struct BuildArgs {
     /// Print all of UCC's output.
     #[arg(long, short)]
     pub verbose: bool,
+
+    /// When to show live progress bars (overrides `build.progress`).
+    /// Default: auto, on a terminal.
+    #[arg(long, value_enum, value_name = "WHEN")]
+    pub progress: Option<ProgressChoice>,
 }
 
 #[derive(Debug, Args)]
@@ -506,6 +511,17 @@ pub enum OutputFormat {
     Tsv,
     /// Nothing; only statistics and the exit code.
     Quiet,
+}
+
+/// When `usagi build` shows live progress bars.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProgressChoice {
+    /// When standard output is a terminal.
+    #[default]
+    Auto,
+    Always,
+    Never,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

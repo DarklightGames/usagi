@@ -28,6 +28,8 @@ similar = "2"
 toml = "0.8"
 walkdir = "2"
 crc32fast = "1"
+indicatif = "0.18"
+console = "0.16.6"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2"

@@ -28,7 +28,7 @@ pub struct ConfigFile {
 /// Settings for `usagi build`. `mod`, `root` and `ini` are read from the
 /// configuration found as usual. `version` and `version-class` are read from
 /// the mod's own configuration file, `<root>/<Mod>/usagi.toml`, when building
-/// a mod, and from the usual one otherwise. `wine` and `locked` can be in
+/// a mod, and from the usual one otherwise. `wine`, `progress` and `locked` can be in
 /// either.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -54,6 +54,8 @@ pub struct BuildConfig {
     /// Globs of package names that are never deleted or rebuilt.
     #[serde(default)]
     pub locked: Vec<String>,
+    /// When to show live progress bars. Default: auto, on a terminal.
+    pub progress: Option<crate::cli::ProgressChoice>,
 }
 
 /// Loads a mod's own configuration file, `usagi.toml` or `.usagi.toml` in
@@ -107,7 +109,7 @@ pub fn game_root(config: &LoadedConfig) -> PathBuf {
 
 /// The configuration for a mod: `config` with the settings of the mod's own
 /// file, `<game_root>/<mod_name>/usagi.toml`, if it has one, on top.
-/// `include`, `exclude`, `strict`, `jobs`, `lint.select` and `build.wine` in the
+/// `include`, `exclude`, `strict`, `jobs`, `lint.select`, `build.wine` and `build.progress` in the
 /// mod's file replace `config`'s; `lint.extend-select`, `lint.ignore` and
 /// `lint.per-path` are added to them. Globs in both files are then relative
 /// to the game directory.
@@ -145,6 +147,7 @@ pub fn merge_mod(
             version_class: modded.build.version_class,
             ini: root.build.ini,
             locked: concat(root.build.locked, modded.build.locked),
+            progress: modded.build.progress.or(root.build.progress),
         },
     };
     Ok(LoadedConfig {

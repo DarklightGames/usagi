@@ -193,6 +193,7 @@ fn run(cli: Cli) -> Result<bool, String> {
                     .map_or_else(config::default_jobs, usize::from),
                 verbose: args.verbose,
                 color,
+                progress: args.progress.or(build.progress).unwrap_or_default(),
                 wine: build.wine.clone().unwrap_or_else(|| "wine".to_string()),
                 version: build.version.clone(),
                 version_class: build.version_class.clone(),

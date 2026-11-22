@@ -6,6 +6,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 
 use super::find_ci;
+use super::progress::Ticker;
 
 /// Lines of UCC output that are only progress, hidden unless `--verbose`.
 const NOISE_PREFIXES: &[&str] = &[
@@ -50,7 +51,7 @@ fn dumpint_succeeded(status_ok: bool, output: &str) -> bool {
 }
 
 /// The ANSI colour for a line of UCC output, if it's an error or warning.
-fn line_color(line: &str) -> Option<&'static str> {
+pub fn line_color(line: &str) -> Option<&'static str> {
     let line = line.trim_start();
     if line.contains(": Error") || line.starts_with("Error") || line.starts_with("Failure") {
         Some("91")
@@ -67,12 +68,19 @@ pub struct Ucc {
     /// `UCC.exe`'s file name, when it's run by another program.
     exe: Option<String>,
     sys_dir: PathBuf,
-    verbose: bool,
-    color: bool,
+}
+
+/// The result of exporting one package's localization.
+#[derive(Debug, Clone)]
+pub struct DumpResult {
+    pub package: String,
+    pub ok: bool,
+    /// What to show about it: UCC's output, and why it failed.
+    pub lines: Vec<String>,
 }
 
 impl Ucc {
-    pub fn find(sys_dir: &Path, wine: &str, verbose: bool, color: bool) -> Result<Self, String> {
+    pub fn find(sys_dir: &Path, wine: &str) -> Result<Self, String> {
         let exe = find_ci(sys_dir, "UCC.exe").ok_or_else(|| {
             format!(
                 "UCC.exe not found in {} (is the SDK installed?)",
@@ -89,8 +97,6 @@ impl Ucc {
             program,
             exe,
             sys_dir: sys_dir.to_path_buf(),
-            verbose,
-            color,
         })
     }
 
@@ -105,15 +111,13 @@ impl Ucc {
         command
     }
 
-    fn print_line(&self, line: &str) {
-        match line_color(line).filter(|_| self.color) {
-            Some(code) => println!("\x1b[{}m{}\x1b[0m", code, line),
-            None => println!("{}", line),
-        }
-    }
-
-    /// Runs UCC with `args`, printing its output as it comes.
-    pub fn run_streaming(&self, args: &[String]) -> Result<ExitStatus, String> {
+    /// Runs UCC with `args`, passing each line of its output to `on_line`
+    /// as it comes.
+    pub fn run_streaming(
+        &self,
+        args: &[String],
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<ExitStatus, String> {
         let mut child = self
             .command(args)
             .stdout(Stdio::piped())
@@ -128,28 +132,23 @@ impl Ucc {
                 Ok(_) => {
                     // UCC's output is single-byte, like its sources.
                     let line: String = buffer.iter().map(|&b| b as char).collect();
-                    let line = line.trim_end_matches(['\r', '\n']);
-                    if self.verbose || !is_noise(line) {
-                        self.print_line(line);
-                    }
+                    on_line(line.trim_end_matches(['\r', '\n']));
                 }
             }
         }
         child.wait().map_err(|e| e.to_string())
     }
 
-    /// Exports the localization of `packages` in parallel, and prints how
-    /// many succeeded, with the output of any that failed. A package fails
-    /// if UCC fails or doesn't write its `.int` file.
+    /// Exports the localization of `packages` in parallel, ticking `ticker`
+    /// as each finishes. A package fails if UCC fails or doesn't write its
+    /// `.int` file.
     pub fn dumpint(
         &self,
         packages: &[&str],
         extra_args: &[String],
         jobs: usize,
-    ) -> Result<(), String> {
-        if packages.is_empty() {
-            return Ok(());
-        }
+        ticker: &Ticker,
+    ) -> Result<Vec<DumpResult>, String> {
         // A `.int` left by an interrupted build would look like success.
         for package in packages {
             if let Some(path) = find_ci(&self.sys_dir, &format!("{}.int", package)) {
@@ -170,6 +169,7 @@ impl Ucc {
                         s.spawn(move || {
                             crate::check::lower_priority();
                             let output = command.output().map_err(|e| e.to_string());
+                            ticker.tick();
                             (package.to_string(), output)
                         })
                     })
@@ -181,51 +181,38 @@ impl Ucc {
                 );
             });
         }
-        let mut failed = Vec::new();
-        for (package, output) in &results {
-            let int_written = find_ci(&self.sys_dir, &format!("{}.int", package)).is_some();
-            let text = output.as_ref().ok().map(|o| {
-                [&o.stdout, &o.stderr]
-                    .iter()
-                    .flat_map(|bytes| bytes.iter().map(|&b| b as char))
-                    .collect::<String>()
-            });
-            let ok = match (output, &text) {
-                (Ok(o), Some(text)) => int_written && dumpint_succeeded(o.status.success(), text),
-                _ => false,
-            };
-            if !ok {
-                failed.push(package.as_str());
-            }
-            if !ok || self.verbose {
-                match (output, &text) {
-                    (Ok(_), Some(text)) => {
-                        for line in text.lines() {
-                            if !is_dumpint_self_match(line) {
-                                self.print_line(line.trim_end_matches('\r'));
-                            }
-                        }
+        Ok(results
+            .into_iter()
+            .map(|(package, output)| {
+                let int_written = find_ci(&self.sys_dir, &format!("{}.int", package)).is_some();
+                let mut lines = Vec::new();
+                let ok = match &output {
+                    Ok(o) => {
+                        let text: String = [&o.stdout, &o.stderr]
+                            .iter()
+                            .flat_map(|bytes| bytes.iter().map(|&b| b as char))
+                            .collect();
+                        lines.extend(
+                            text.lines()
+                                .filter(|line| !is_dumpint_self_match(line))
+                                .map(|line| line.trim_end_matches('\r').to_string()),
+                        );
                         if !int_written {
-                            println!("{}: no {}.int was written", package, package);
+                            lines.push(format!("{}: no {}.int was written", package, package));
                         }
+                        int_written && dumpint_succeeded(o.status.success(), &text)
                     }
-                    (Err(e), _) => println!("{}: could not run {}: {}", package, self.program, e),
-                    _ => {}
-                }
-            }
-        }
-        let succeeded = results.len() - failed.len();
-        println!(
-            "Exported localization: {} succeeded, {} failed{}",
-            succeeded,
-            failed.len(),
-            if failed.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", failed.join(", "))
-            }
-        );
-        Ok(())
+                    Err(e) => {
+                        lines.push(format!(
+                            "{}: could not run {}: {}",
+                            package, self.program, e
+                        ));
+                        false
+                    }
+                };
+                DumpResult { package, ok, lines }
+            })
+            .collect())
     }
 }
 

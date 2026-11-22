@@ -141,7 +141,8 @@ A build does the following:
 7. Parses the sources of the packages it will compile, and stops if a file
    doesn't parse, unless `--no-check` is given. `strict` applies.
 8. Removes the out-of-date packages and runs UCC. UCC's progress messages
-   are hidden unless `--verbose` is given.
+   are hidden unless `--verbose` is given; on a terminal, they drive the
+   progress bars (see [Output](#output)).
 9. With a mod, moves the compiled packages to `<root>/<Mod>/System`.
 10. With `--dumpint`, exports the localization (`.int` files) of the
     packages whose sources changed. The exports run in parallel; their
@@ -196,8 +197,50 @@ removed (step 2), even if it matches `locked`. Nothing is locked by default.
 | `--ignore-dependencies` | Don't rebuild the packages after one that changed. |
 | `--no-check` | Don't parse the sources before compiling. |
 | `-v`, `--verbose` | Show all of UCC's output. |
+| `--progress WHEN` | When to show live progress bars: `auto` (the default: when standard output is a terminal), `always` or `never`. Overrides `build.progress`. |
 
-It ends with `Build: N succeeded, N failed, 0 skipped, N up-to-date`.
+#### Output
+
+When standard output isn't a terminal (a pipe, an editor or CI), or with
+`--progress never`, the build prints plain lines: `Build started for ...`,
+each package to compile and why, UCC's output apart from its progress
+messages, and at the end `Build: N succeeded, N failed, 0 skipped, N
+up-to-date`.
+
+On a terminal, or with `--progress always`, it shows live progress instead:
+
+```
+ usagi build mod: MyMod  (3 of 7 packages out of date)
+ ✓ Checked sources  142 files      0.4s
+ ✓ MyModCore        38 classes     2.1s  ⚠ 1 warning
+ ⠹ MyModWeapons     compiling
+   ━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━  21/34  AssaultRifleFire
+ · MyModUI          waiting   12 classes
+
+   Overall ━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━  59%  4s
+```
+
+- Checking the sources has a bar of the files parsed.
+- Each package being compiled has a row, with its stage (`analyzing`,
+  `parsing`, `compiling`, `importing defaults`), a bar of the classes that
+  stage has done, and the class it's on. They are read from UCC's output:
+  the heading it logs for each of the `EditPackages`, and its `Parsing`,
+  `Compiling` and `Importing Defaults for` messages.
+- The next few packages are listed as waiting, and a bar shows the whole
+  build's progress through parsing and compiling.
+- Exporting localization has a bar of the packages exported.
+- A finished step stays as a line: `✓` with its time and any warnings, or
+  `✗` with its errors. A package that UCC didn't get to is `not compiled`.
+- UCC's errors and warnings are collected and printed at the end, under the
+  package they belong to, with the output of exports that failed and, if
+  UCC failed, its other output. With `--verbose`, all of UCC's output is
+  also shown as it comes.
+- It ends with `Build succeeded` or `Build failed`, the number of packages
+  compiled, failed and up to date, and how long the build took.
+
+The glyphs and bars are Unicode when the locale is UTF-8 (`LC_ALL`,
+`LC_CTYPE` or `LANG`), or on Windows in Windows Terminal or VS Code, and
+ASCII otherwise. Colours follow `--color`.
 
 ### `usagi pkg list <PATH>`
 
@@ -1025,6 +1068,7 @@ root = "."                # the game directory. Default: this file's directory
 wine = "wine"             # runs UCC.exe, except on Windows. Default: wine
 ini = "MyGame.ini"        # without a mod: the INI in System whose EditPackages are built
 locked = ["Core", "Engine"]  # globs of packages never to delete or rebuild; ["*"] for all
+progress = "auto"         # live progress bars: auto (on a terminal), always or never
 # Without a mod, the version class is set here (with a mod, in the mod's file):
 # version = "1.2.3"
 # version-class = "MyPackage/Classes/MyBuildManifest.uc"
@@ -1076,8 +1120,8 @@ The game directory's file then needs only:
 mod = "MyMod"
 ```
 
-`include`, `exclude`, `strict`, `jobs`, `lint.select` and `build.wine` in the
-mod's file replace the game directory's; `lint.extend-select`, `lint.ignore`,
+`include`, `exclude`, `strict`, `jobs`, `lint.select`, `build.wine` and
+`build.progress` in the mod's file replace the game directory's; `lint.extend-select`, `lint.ignore`,
 `lint.per-path` and `build.locked` are added to them. Globs in both files are
 relative to the game directory. When building a mod, `version` and
 `version-class` can only be set in its file, and `mod`, `root` and `ini` only
