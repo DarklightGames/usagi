@@ -727,21 +727,36 @@ standard error, and the command exits with code 1.
 
 ### `usagi pkg export <PATHS>... --output <DIR>`
 
-Writes objects from package files to a directory, two files for each:
+Writes objects from package files to a directory: each object's native
+data, and with `--properties`, its properties.
 
-- `.bin`: the object's native data, the bytes after its tagged properties (a
-  texture's mipmaps, a sound's wave data, ...). The properties themselves
-  aren't included.
-- `.t3d`: its properties as T3D, exactly as
-  [`pkg obj`](#usagi-pkg-obj-path-objects) prints them.
+- Its native data, the bytes after its tagged properties (a texture's
+  mipmaps, a sound's file, ...), in a file format where usagi has one for the
+  object's class, and otherwise as it is, as `.bin`. The properties
+  themselves aren't included. The formats so far:
 
-Both are written even when empty, and files already in the directory are
+  | Class | Format |
+  |---|---|
+  | `Engine.Sound` (not its subclasses) | `.wav`: the sound's file, which the engine keeps whole. Only one that's a WAV file (a RIFF file of form `WAVE`) is written as `.wav`; every sound in UT2004's, Killing Floor's and Red Orchestra's packages is. |
+
+- With `--properties`, its properties, as
+  [`pkg obj`](#usagi-pkg-obj-path-objects) prints them, in a format:
+  `--properties` or `--properties=t3d` for T3D (`.t3d`), `--properties=json`
+  for JSON (`.json`, the object `pkg obj --format json` prints in its array),
+  `--properties=toml` for TOML (`.toml`, laid out as the JSON). They aren't
+  written by default.
+
+The files are written even when empty, and files already in the directory are
 overwritten. The directory is made if it doesn't exist.
 
 ```sh
 usagi pkg export MyTex.utx -o out                                # every object
 usagi pkg export MyTex.utx --object "Texture'MyTex.UI.*'" -o out
 usagi pkg export Textures/*.utx --class Texture -o out --layout folder
+usagi pkg export MySounds.uax --class Sound -o out                # .wav files
+usagi pkg export MySounds.uax -o out --native bin                 # .bin, as it's stored
+usagi pkg export MyTex.utx -o out --properties                    # native data and .t3d
+usagi pkg export MyTex.utx -o out --native none --properties=json # .json only
 ```
 
 Objects are chosen as in `pkg obj`, but with `--object`, since every other
@@ -757,13 +772,16 @@ exported: they're only containers, and appear in the files' names or folders.
 | `--object OBJECT,...` | The objects, as for `pkg obj`: `Texture'MyTex.Walls.Brick'`, or `MyTex.Walls.Brick`, with `*`, `**` and `?`. Can be given more than once. |
 | `--class CLASS,...` | Only objects of these classes, as for `pkg obj`. |
 | `--layout flat\|folder` | Where each object's files go. Default: `flat`. |
+| `--native auto\|bin\|none` | What to write native data as. `auto`: in a file format where there's one, otherwise `.bin`. `bin`: always `.bin`. `none`: no native data. Default: `auto`. |
+| `--raw` | Also write the native data as it is (`.bin`) for objects written in a file format. |
+| `--properties[=t3d\|json\|toml]` | Also write each object's properties, in this format. Default format: `t3d`. |
 
 The layouts, for `Texture'MyTex.Walls.Brick'`:
 
 | Layout | Files |
 |---|---|
-| `flat` | `Texture'MyTex.Walls.Brick'.bin` and `.t3d`, named as UnrealScript refers to the object, all in the directory. |
-| `folder` | `MyTex/Texture/Walls/Brick.bin` and `.t3d`: a folder for the package, then the class, then each group. |
+| `flat` | `Texture'MyTex.Walls.Brick'.bin` (and `.t3d`, ...), named as UnrealScript refers to the object, all in the directory. |
+| `folder` | `MyTex/Texture/Walls/Brick.bin` (and `.t3d`, ...): a folder for the package, then the class, then each group. |
 
 Both include everything that identifies an object (its package, class,
 groups and name), so two objects never share files. The engine allows two
@@ -772,8 +790,16 @@ combiner made from it. The exception is the same package given twice, from
 two files: then the collisions are listed, nothing is written, and the command
 exits with code 2.
 
-A class's `.t3d` is its default properties, and its `.bin` is empty, since
-its own data comes before them. An object whose properties are malformed
+`--native none` without `--properties` would write nothing, so it's an error
+(exit code 2). A class's properties are its default properties, and its
+`.bin` is empty, since its own data comes before them.
+
+If an object's native data can't be written in its format, it's written as
+`.bin` instead, and a note says why on standard error: a sound that isn't a
+WAV file (`it isn't a WAV file, and converting it isn't supported; written as
+.bin`), or native data that's malformed, which also makes the command exit
+with code 1. It ends with how many objects were exported, and how many of
+them in a file format: `Exported 282 objects (183 in a file format) to out`. An object whose properties are malformed
 isn't written: the problem is reported on standard error, the other objects
 are written, and the command exits with code 1. Properties are read by their
 declarations, found as for `pkg obj`.

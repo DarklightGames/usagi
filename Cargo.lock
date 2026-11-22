@@ -997,6 +997,7 @@ dependencies = [
  "tempfile",
  "toml",
  "usagi-core",
+ "usagi-io",
  "usagi-pkg",
  "walkdir",
 ]
@@ -1013,6 +1014,13 @@ dependencies = [
  "strum",
  "strum_macros",
  "t3d",
+]
+
+[[package]]
+name = "usagi-io"
+version = "0.3.0"
+dependencies = [
+ "usagi-pkg",
 ]
 
 [[package]]

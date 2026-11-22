@@ -7,11 +7,12 @@ use std::path::PathBuf;
 
 use std::rc::Rc;
 
-use usagi_pkg::{ObjectPattern, ObjectRef, Package, Packages, SearchPath};
+use usagi_io::{Audio, WavWriter, Writer};
+use usagi_pkg::{ObjectPattern, ObjectRef, Package, Packages, SearchPath, Sound};
 
 use super::Style;
-use super::obj::{Object, explain, is_class, not_found, write_t3d};
-use crate::cli::{PkgExportArgs, PkgExportLayout};
+use super::obj::{Object, explain, is_class, not_found, object_json, toml_text, write_t3d};
+use crate::cli::{PkgExportArgs, PkgExportLayout, PkgExportNative, PkgPropertiesFormat};
 
 /// A package file that has been read.
 struct Input {
@@ -21,8 +22,10 @@ struct Input {
     packages: Rc<Packages>,
 }
 
-/// `usagi pkg export`: writes each object asked for to a `.bin` file (its
-/// native data, after its properties) and a `.t3d` file (its properties).
+/// `usagi pkg export`: writes each object's native data, after its
+/// properties: in a file format where there's one (a sound as `.wav`),
+/// otherwise as it is (`.bin`); and if asked, its properties (`.t3d`,
+/// `.json` or `.toml`).
 /// Returns whether every object could be exported; problems are written to
 /// `err`.
 pub fn export(
@@ -30,6 +33,11 @@ pub fn export(
     out: &mut impl Write,
     err: &mut impl Write,
 ) -> Result<bool, String> {
+    if args.native == PkgExportNative::None && args.properties.is_none() {
+        return Err(
+            "nothing to write: `--native none` without `--properties` writes no files".to_string(),
+        );
+    }
     // One set of packages per game, so each package is read once.
     let mut games: HashMap<Vec<SearchPath>, Rc<Packages>> = HashMap::new();
     let inputs = args
@@ -96,6 +104,7 @@ pub fn export(
         return Err(collisions.join("\n"));
     }
 
+    let mut converted = 0;
     for ((input, object, end), destination) in exports.iter().zip(&destinations) {
         let base = args.output.join(destination);
         if let Some(parent) = base.parent() {
@@ -109,25 +118,90 @@ pub fn export(
             let path = PathBuf::from(path);
             fs::write(&path, bytes).map_err(|e| format!("{}: {}", path.display(), e))
         };
-        write("bin", &input.package.export_data(object.export)[*end..])?;
-        let mut t3d = Vec::new();
-        write_t3d(&input.package, object, Style { color: false }, &mut t3d)
-            .expect("writing to memory");
-        write("t3d", &t3d)?;
+        let native = &input.package.export_data(object.export)[*end..];
+        let file = match args.native {
+            PkgExportNative::Auto => convert(&input.package, object.export, *end),
+            PkgExportNative::Bin | PkgExportNative::None => Ok(None),
+        };
+        let file = file.unwrap_or_else(|(problem, malformed)| {
+            let note = format!(
+                "usagi: {}: {}: {}; written as .bin",
+                input.file, object.reference, problem
+            );
+            let _ = writeln!(err, "{}", note);
+            ok &= !malformed;
+            None
+        });
+        match file {
+            _ if args.native == PkgExportNative::None => {}
+            Some((extension, bytes)) => {
+                write(extension, &bytes)?;
+                converted += 1;
+                if args.raw {
+                    write("bin", native)?;
+                }
+            }
+            None => write("bin", native)?,
+        }
+        match args.properties {
+            None => {}
+            Some(PkgPropertiesFormat::T3d) => {
+                let mut t3d = Vec::new();
+                write_t3d(&input.package, object, Style { color: false }, &mut t3d)
+                    .expect("writing to memory");
+                write("t3d", &t3d)?;
+            }
+            Some(PkgPropertiesFormat::Json) => {
+                let mut json =
+                    serde_json::to_vec_pretty(&object_json(&input.package, object)).expect("JSON");
+                json.push(b'\n');
+                write("json", &json)?;
+            }
+            Some(PkgPropertiesFormat::Toml) => {
+                let toml = toml_text(&object_json(&input.package, object));
+                write("toml", toml.as_bytes())?;
+            }
+        }
     }
+    let plural =
+        |n: usize, one: &str, many: &str| format!("{} {}", n, if n == 1 { one } else { many });
+    let formats = if converted > 0 {
+        format!(" ({} in a file format)", converted)
+    } else {
+        String::new()
+    };
     writeln!(
         out,
-        "Exported {} {} to {}",
-        exports.len(),
-        if exports.len() == 1 {
-            "object"
-        } else {
-            "objects"
-        },
+        "Exported {}{} to {}",
+        plural(exports.len(), "object", "objects"),
+        formats,
         args.output.display()
     )
     .map_err(|e| e.to_string())?;
     Ok(ok)
+}
+
+/// An object's native data, from `end` (after its properties), in a file
+/// format: its extension and contents. `None` if there's no format for its
+/// class. A problem (and whether it's that the data is malformed) if there
+/// is one but it can't be written in it.
+fn convert(
+    package: &Package,
+    export: usize,
+    end: usize,
+) -> Result<Option<(&'static str, Vec<u8>)>, (String, bool)> {
+    // A sound's subclasses don't start with a sound's data.
+    if !is_class(package, export, "Engine.Sound") {
+        return Ok(None);
+    }
+    let (sound, _) = package
+        .read_native::<Sound>(export, end)
+        .map_err(|e| (e.to_string(), true))?;
+    let mut bytes = Vec::new();
+    WavWriter
+        .write(&Audio::from_sound(&sound), &mut bytes)
+        .map_err(|refused| (refused.to_string(), false))?;
+    Ok(Some((WavWriter.extension(), bytes)))
 }
 
 /// The exports to write, in the order of the files and then of their export

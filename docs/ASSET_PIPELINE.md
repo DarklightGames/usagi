@@ -5,9 +5,10 @@ DDS and PNG, sounds to WAV, meshes and animations to glTF, ...), and later for
 importing those formats back into package data. **Little here is
 implemented yet**: the fallback, `usagi pkg export`, writes every object's
 tagged properties as T3D and its native data, unread, as `.bin` (see
-[CLI.md](CLI.md#usagi-pkg-export-paths---output-dir)); and the first native
+[CLI.md](CLI.md#usagi-pkg-export-paths---output-dir)); the first native
 data types (step 1, below) read textures and sounds, which `usagi pkg diff`
-compares. The native data
+compares; and sounds export as WAV, through all three layers: `Sound`, the
+`Audio` model and `WavWriter`, in `usagi-io`. The native data
 formats known so far are in
 [PACKAGE_FORMAT.md](PACKAGE_FORMAT.md#native-data).
 
@@ -128,10 +129,19 @@ reader of the package format without image or audio dependencies.
 
 ## CLI
 
-`usagi pkg export --format <FORMAT>` picks the writer, with a default for
+`usagi pkg export --native <FORMAT>` picks the writer, with a default for
 each kind of asset (DDS for DXT textures, PNG for other images, ...).
 `--raw` writes `.bin` as well. Objects without a reader or a writer are
 written as `.t3d` and `.bin`, as now.
+
+Done so far, with the flag named `--native` rather than `--format`, since
+`--properties[=t3d|json|toml]` chooses the properties' format: `--native
+auto` (the default) uses the one writer there is, WAV for sounds, `--native
+bin` turns writers off, and `--native none` writes no native data; `--raw`
+works as above. Properties aren't written unless asked for. A format's name
+will be added to `--native` with its writer. Which
+class has a writer is still a check in `pkg export` (`Engine.Sound` exactly),
+not yet the registry by class chain that step 1 describes.
 
 ## Open questions
 

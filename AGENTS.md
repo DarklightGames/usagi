@@ -11,6 +11,7 @@ static analysis on it, building mods with UCC, and reading package files:
 |---|---|
 | `crates/usagi-core` | The library (`usagi_core`): parser, AST, symbol table and lints. |
 | `crates/usagi-pkg` | The package reader (`usagi_pkg`). See [Packages](#packages). |
+| `crates/usagi-io` | Exporting package data to file formats (`usagi_io`): asset models, adapters from `usagi-pkg`'s types, and writers. See [Exporting](#exporting). |
 | `crates/usagi-cli` | The `usagi` binary: `parse`, `lint` (and `lint rule`), `build` (in `src/build/`), `pkg` (in `src/pkg/`; `pkg obj` in `obj.rs`, `pkg export` in `export.rs`, `pkg diff` in `diff.rs`, and finding a game's `Paths` in `game.rs`) and configuration files. Its tests are in `tests/cli.rs`. |
 
 Paths below are relative to `crates/usagi-core`.
@@ -96,10 +97,11 @@ install; use a scratch copy (copy `System/Default.ini`, the mod's `System`
 folder and the `.ini` files, and symlink the source package folders).
 
 Releases are built by `.github/workflows/release.yml` when a `v*` tag is
-pushed. It also publishes `usagi-core`, `usagi-pkg` and then `usagi-cli` to
-crates.io, so before tagging, set `version` in the root `Cargo.toml` to match
-the tag, and the `usagi-core` and `usagi-pkg` dependencies' `version` in
-`crates/usagi-cli/Cargo.toml` to the same.
+pushed. It also publishes `usagi-core`, `usagi-pkg`, `usagi-io` and then
+`usagi-cli` to crates.io, so before tagging, set `version` in the root
+`Cargo.toml` to match the tag, and the `usagi-core`, `usagi-pkg` and
+`usagi-io` dependencies' `version` in `crates/usagi-cli/Cargo.toml` and
+`crates/usagi-io/Cargo.toml` to the same.
 
 ## Packages
 
@@ -153,6 +155,21 @@ LFS objects (`git lfs pull`/`fetch`, a checkout of other revisions, or
 `usagi pkg diff --online`). `usagi pkg diff` is offline by default: it reads
 only LFS objects already in the local cache, and fails rather than download
 one.
+
+## Exporting
+
+`crates/usagi-io` turns objects' native data into common file formats, as
+[`docs/ASSET_PIPELINE.md`](docs/ASSET_PIPELINE.md) designs: adapters turn
+`usagi-pkg`'s types into a few game-independent asset models (`Audio`), and
+a `Writer` writes a model to one format (`WavWriter`), refusing an asset it
+can't hold without loss. `usagi pkg export` uses them, and writes objects
+with no format as `.bin`. Keep it free of `usagi-cli`, and keep its 100%
+coverage (`cargo llvm-cov --summary-only -p usagi-io`).
+
+| Path | Contents |
+|---|---|
+| `src/lib.rs` | The `Writer` trait and `Refused`. |
+| `src/audio.rs` | `Audio`, from a `Sound`, and `WavWriter`. |
 
 ## Static analysis
 

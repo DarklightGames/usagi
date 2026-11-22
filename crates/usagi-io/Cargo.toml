@@ -1,0 +1,17 @@
+[package]
+name = "usagi-io"
+description = "Exports Unreal Engine 2 package data to common file formats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["unreal", "package", "modding", "export"]
+categories = ["game-development", "multimedia"]
+repository.workspace = true
+
+[lib]
+name = "usagi_io"
+
+[dependencies]
+usagi-pkg = { path = "../usagi-pkg", version = "0.3.0" }

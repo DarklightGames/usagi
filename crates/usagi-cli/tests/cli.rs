@@ -2747,8 +2747,13 @@ fn pkg_obj_other_types() {
     assert_eq!(objects[0]["properties"][7]["tag_size"], 6);
 }
 
+/// `pkg export`, with the properties as T3D (which aren't written by
+/// default).
 fn pkg_export(dir: &Path, args: &[&str]) -> assert_cmd::assert::Assert {
-    usagi(dir).args(["pkg", "export"]).args(args).assert()
+    usagi(dir)
+        .args(["pkg", "export", "--properties"])
+        .args(args)
+        .assert()
 }
 
 /// The files under `dir`, relative to it, sorted, with `/` between folders.
@@ -3836,6 +3841,220 @@ fn pkg_diff_a_git_lfs_pointer_in_the_working_tree() {
         .assert()
         .code(2)
         .stderr("usagi: New.u: it's a Git LFS pointer: its object isn't downloaded\n");
+}
+
+/// A minimal WAV file.
+fn wav_file() -> Vec<u8> {
+    let mut out = b"RIFF".to_vec();
+    out.extend(30u32.to_le_bytes());
+    out.extend(b"WAVEfmt ");
+    out.extend(16u32.to_le_bytes());
+    out.extend([1, 0, 1, 0, 0x44, 0xAC, 0, 0, 0x88, 0x58, 1, 0, 2, 0, 16, 0]);
+    out.extend(b"data");
+    out.extend(2u32.to_le_bytes());
+    out.extend([0xFF, 0x7F]);
+    out
+}
+
+/// `Sounds.uax`: sounds whose data is a WAV file (`Boom`), an MP3 (`Song`),
+/// and cut short (`Cut`), and a sound group (`Group`).
+fn sound_package() -> Vec<u8> {
+    let names = [
+        "None",
+        "Core",
+        "Package",
+        "Engine",
+        "Class",
+        "Sound",
+        "SoundGroup",
+        "WAV",
+        "Boom",
+        "Song",
+        "Cut",
+        "Group",
+    ];
+    let n = |text: &str| names.iter().position(|&n| n == text).unwrap() as i32;
+    let imports = [
+        (n("Core"), n("Package"), 0, n("Engine")),
+        (n("Core"), n("Class"), -1, n("Sound")),
+        (n("Core"), n("Class"), -1, n("SoundGroup")),
+    ];
+    // A sound's data after its (empty) properties, if it starts at
+    // `offset` in the file: its file type, likelihood, then the file as a
+    // lazy array.
+    let sound = |offset: usize, file: &[u8]| {
+        let mut data = vec![0, n("WAV") as u8];
+        data.extend(1.0f32.to_le_bytes());
+        let count = compact_index(file.len() as i32);
+        let end = offset + data.len() + 4 + count.len() + file.len();
+        data.extend((end as i32).to_le_bytes());
+        data.extend(count);
+        data.extend(file);
+        data
+    };
+    let exports = |offsets: &[usize]| {
+        let flags = 0x00070004;
+        vec![
+            (-2, 0, n("Boom"), flags, sound(offsets[0], &wav_file())),
+            (
+                -2,
+                0,
+                n("Song"),
+                flags,
+                sound(offsets[1], b"ID3\x04\0\0\0\0\0\0"),
+            ),
+            (-2, 0, n("Cut"), flags, vec![0, n("WAV") as u8, 0, 0]),
+            (-3, 0, n("Group"), flags, vec![0, 1, 1]),
+        ]
+    };
+    // Where each export's data is, for the lazy arrays' SeekPos.
+    let placeholder =
+        usagi_pkg::Package::from_bytes(&package_file(&names, &imports, &exports(&[0, 0]))).unwrap();
+    let offsets: Vec<usize> = placeholder
+        .exports()
+        .iter()
+        .map(|e| e.serial_offset.unwrap() as usize)
+        .collect();
+    package_file(&names, &imports, &exports(&offsets))
+}
+
+#[test]
+fn pkg_export_sounds_as_wav() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("Sounds.uax"), sound_package()).unwrap();
+    let out = pkg_export(dir.path(), &["Sounds.uax", "-o", "out"])
+        .code(1)
+        .stdout(predicate::str::ends_with(
+            "Exported 4 objects (1 in a file format) to out\n",
+        ))
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(out).unwrap();
+    assert!(
+        stderr.contains(
+            "usagi: Sounds.uax: Sound'Sounds.Song': it isn't a WAV file, and converting it \
+             isn't supported; written as .bin\n"
+        ),
+        "{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("usagi: Sounds.uax: Sound'Sounds.Cut': ")
+            && stderr.contains("; written as .bin\n"),
+        "{}",
+        stderr
+    );
+    let out = dir.path().join("out");
+    assert_eq!(
+        fs::read(out.join("Sound'Sounds.Boom'.wav")).unwrap(),
+        wav_file()
+    );
+    assert_eq!(
+        files_under(&out),
+        [
+            "Sound'Sounds.Boom'.t3d",
+            "Sound'Sounds.Boom'.wav",
+            "Sound'Sounds.Cut'.bin",
+            "Sound'Sounds.Cut'.t3d",
+            "Sound'Sounds.Song'.bin",
+            "Sound'Sounds.Song'.t3d",
+            "SoundGroup'Sounds.Group'.bin",
+            "SoundGroup'Sounds.Group'.t3d",
+        ]
+    );
+    // --raw: the native data as it is too.
+    pkg_export(
+        dir.path(),
+        &[
+            "Sounds.uax",
+            "--object",
+            "Sounds.Boom",
+            "-o",
+            "raw",
+            "--raw",
+        ],
+    )
+    .code(0);
+    assert_eq!(
+        files_under(&dir.path().join("raw")),
+        [
+            "Sound'Sounds.Boom'.bin",
+            "Sound'Sounds.Boom'.t3d",
+            "Sound'Sounds.Boom'.wav"
+        ]
+    );
+    // --native bin: no file formats.
+    pkg_export(
+        dir.path(),
+        &[
+            "Sounds.uax",
+            "--object",
+            "Sounds.Boom",
+            "-o",
+            "bin",
+            "--native",
+            "bin",
+        ],
+    )
+    .code(0)
+    .stdout(predicate::str::ends_with("Exported 1 object to bin\n"));
+    assert_eq!(
+        files_under(&dir.path().join("bin")),
+        ["Sound'Sounds.Boom'.bin", "Sound'Sounds.Boom'.t3d"]
+    );
+}
+
+#[test]
+fn pkg_export_properties_formats() {
+    let dir = obj_dir();
+    let export = |args: &[&str]| {
+        usagi(dir.path())
+            .args(["pkg", "export", "MyPkg.utx", "--object", "MyPkg.UI.Bar"])
+            .args(args)
+            .assert()
+    };
+    // By default, native data only.
+    export(&["-o", "default"]).code(0);
+    assert_eq!(
+        files_under(&dir.path().join("default")),
+        ["Texture'MyPkg.UI.Bar'.bin"]
+    );
+    // Properties in each format, without native data.
+    export(&["-o", "t3d", "--native", "none", "--properties"]).code(0);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("t3d/Texture'MyPkg.UI.Bar'.t3d")).unwrap(),
+        BAR_T3D
+    );
+    export(&["-o", "json", "--native", "none", "--properties=json"]).code(0);
+    let json: serde_json::Value = serde_json::from_slice(
+        &fs::read(dir.path().join("json/Texture'MyPkg.UI.Bar'.json")).unwrap(),
+    )
+    .unwrap();
+    // As `pkg obj --format json` prints it.
+    let out = usagi(dir.path())
+        .args([
+            "pkg",
+            "obj",
+            "MyPkg.utx",
+            "MyPkg.UI.Bar",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let obj: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(json, obj[0]);
+    export(&["-o", "toml", "--native", "none", "--properties=toml"]).code(0);
+    let toml = fs::read_to_string(dir.path().join("toml/Texture'MyPkg.UI.Bar'.toml")).unwrap();
+    assert_eq!(toml_as_json(&toml), without_nulls(json));
+    // Nothing to write.
+    export(&["-o", "none", "--native", "none"])
+        .code(2)
+        .stderr(predicate::str::contains("nothing to write"));
 }
 
 /// TOML read back, as JSON.

@@ -168,6 +168,47 @@ pub struct PkgExportArgs {
     /// Where in the directory each object's files go.
     #[arg(long, value_enum, default_value_t = PkgExportLayout::Flat)]
     pub layout: PkgExportLayout,
+
+    /// What to write objects' native data as.
+    #[arg(long, value_enum, default_value_t = PkgExportNative::Auto)]
+    pub native: PkgExportNative,
+
+    /// Also write the native data as it is (`.bin`) for objects written in
+    /// a file format.
+    #[arg(long)]
+    pub raw: bool,
+
+    /// Also write each object's properties, in this format (default: T3D).
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "t3d"
+    )]
+    pub properties: Option<PkgPropertiesFormat>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PkgExportNative {
+    /// A file format where there's one: sounds as WAV. Other objects, as
+    /// `.bin`.
+    Auto,
+    /// Every object's native data as it is, as `.bin`.
+    Bin,
+    /// No native data.
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PkgPropertiesFormat {
+    /// T3D, as UnrealEd exports objects (`.t3d`).
+    T3d,
+    /// JSON, as `pkg obj --format json` prints an object (`.json`).
+    Json,
+    /// TOML, laid out as the JSON (`.toml`).
+    Toml,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
