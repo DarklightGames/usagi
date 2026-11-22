@@ -3837,3 +3837,67 @@ fn pkg_diff_a_git_lfs_pointer_in_the_working_tree() {
         .code(2)
         .stderr("usagi: New.u: it's a Git LFS pointer: its object isn't downloaded\n");
 }
+
+/// TOML read back, as JSON.
+fn toml_as_json(text: &str) -> serde_json::Value {
+    let value: toml::Value = toml::from_str(text).unwrap();
+    serde_json::to_value(value).unwrap()
+}
+
+/// JSON without its null fields, which TOML can't hold; a null element of
+/// an array is an empty table.
+fn without_nulls(json: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match json {
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k, without_nulls(v)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|v| match v {
+                    Value::Null => Value::Object(Default::default()),
+                    v => without_nulls(v),
+                })
+                .collect(),
+        ),
+        v => v,
+    }
+}
+
+#[test]
+fn pkg_obj_t3d_and_toml() {
+    let dir = obj_dir();
+    // T3D alone: no colour, and not a table with --property.
+    usagi(dir.path())
+        .args(["pkg", "obj", "MyPkg.utx", "MyPkg.UI.Bar"])
+        .args(["--format", "t3d", "--color", "always"])
+        .assert()
+        .code(0)
+        .stdout(BAR_T3D);
+    pkg_obj(
+        dir.path(),
+        &["MyPkg.UI.Bar", "--format", "t3d", "--property", "Format"],
+    )
+    .code(0)
+    .stdout(BAR_T3D);
+    // TOML: the JSON's objects, as `objects`, without nulls.
+    let toml = pkg_obj(dir.path(), &["MyPkg.UI.*", "MyPkg.Odd", "--format", "toml"])
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let json = pkg_obj(dir.path(), &["MyPkg.UI.*", "MyPkg.Odd", "--format", "json"])
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(
+        toml_as_json(&String::from_utf8(toml).unwrap()),
+        without_nulls(serde_json::json!({ "objects": json }))
+    );
+}

@@ -585,7 +585,7 @@ as its tag allows, which for some arrays is a guess.
 | `--class CLASS,...` | Only objects of these classes: by name (`Texture`) or with their package (`Engine.Texture`), in any case. Subclasses don't match. Can be given more than once. |
 | `--property NAME,...` | Only these properties, in any case. In the text format, the objects are shown as a table. Can be given more than once. |
 | `--raw` | Show where each property is in the object's data, its type, its size and its value's bytes. Text format only. |
-| `--format text\|concise\|json` | How to print the properties. Default: `text`. |
+| `--format text\|t3d\|concise\|json\|toml` | How to print the properties. Default: `text`. |
 
 `text` prints each object as T3D, as UnrealEd exports objects, after a
 comment with its reference and how much native data follows its
@@ -684,6 +684,40 @@ of arrays of properties (an array of structs read without it), or
 a value that can't be read, with every byte in hex. A class's `properties`
 are its defaults. `native_size` is `null` when the properties couldn't all be
 read.
+
+`t3d` prints the objects as T3D, as `text` does, but never in colour, and
+never as a table: `--property` only chooses the properties.
+
+`toml` prints the same as `json`, laid out the same, as TOML: the array of
+objects is `objects`, an array of tables, and every object, property and
+value is as in the JSON, in the same order. TOML has no null, so a field
+that's `null` in the JSON (`error`, `native_size`, a `null` value) is left
+out, and an element of an array that's `null` (an array of objects with
+`None` in it) is an empty table, `{}`. And TOML puts a table's arrays of
+tables (`properties`, a struct's value) after its other fields:
+
+```toml
+[[objects]]
+index = 7
+reference = "TexPanner'DH_GUI_Tex.MainMenu.FogPan'"
+class = "TexPanner"
+path = "DH_GUI_Tex.MainMenu.FogPan"
+offset = 3046151
+size = 131
+native_size = 0
+
+[[objects.properties]]
+name = "PanRate"
+type = "FloatProperty"
+index = 0
+offset = 0
+size = 4
+tag_size = 4
+value = 0.01
+```
+
+The formats that write objects' properties, `t3d`, `json` and `toml`, are
+the same as `pkg export --properties` writes, one object to a file.
 
 If an object's data is malformed (a tag that runs past its end, or a name
 out of range), the properties before the problem are shown, then the

@@ -41,8 +41,10 @@ pub fn obj(
         PkgObjFormat::Text if args.raw => view.raw(out),
         PkgObjFormat::Text if !args.property.is_empty() => view.table(out),
         PkgObjFormat::Text => view.t3d(out),
+        PkgObjFormat::T3d => view.t3d_plain(out),
         PkgObjFormat::Concise => view.concise(out),
         PkgObjFormat::Json => view.json(out),
+        PkgObjFormat::Toml => view.toml(out),
     }
     .map_err(|e| e.to_string())?;
     let mut ok = true;
@@ -362,86 +364,144 @@ impl View<'_> {
         let objects: Vec<Json> = self
             .objects
             .iter()
-            .map(|object| {
-                let export = &self.package.exports()[object.export];
-                json!({
-                    "index": ObjectRef::Export(object.export).raw(),
-                    "reference": object.reference,
-                    "class": self.package.class_name(export),
-                    "path": self.package.full_path(ObjectRef::Export(object.export)),
-                    "offset": export.serial_offset,
-                    "size": object.size,
-                    "properties": self.json_properties(&object.properties),
-                    "native_size": object.native_size(),
-                    "error": object.error.as_ref().map(|e| e.to_string()),
-                })
-            })
+            .map(|object| object_json(self.package, object))
             .collect();
         serde_json::to_writer_pretty(&mut *out, &objects)?;
         writeln!(out)
     }
 
-    fn json_properties(&self, properties: &[Property]) -> Json {
-        Json::Array(
-            properties
-                .iter()
-                .map(|p| {
-                    let mut fields = Map::new();
-                    fields.insert("name".into(), json!(p.name));
-                    fields.insert("type".into(), json!(p.kind.name()));
-                    if let Some(name) = &p.struct_name {
-                        fields.insert("struct".into(), json!(name));
-                    }
-                    fields.insert("index".into(), json!(p.array_index));
-                    fields.insert("offset".into(), json!(p.offset));
-                    fields.insert("size".into(), json!(p.size));
-                    fields.insert("tag_size".into(), json!(p.tag_size));
-                    fields.insert("value".into(), self.json_value(&p.value));
-                    Json::Object(fields)
-                })
-                .collect(),
-        )
+    /// TOML: as the JSON, the objects being an array of tables, `objects`.
+    fn toml(&self, out: &mut impl Write) -> io::Result<()> {
+        let objects: Vec<Json> = self
+            .objects
+            .iter()
+            .map(|object| object_json(self.package, object))
+            .collect();
+        out.write_all(toml_text(&json!({ "objects": objects })).as_bytes())
     }
 
-    /// A value as JSON: numbers, booleans and strings as themselves; an
-    /// object as its reference (or `null`); vectors, rotators and colours as
-    /// objects of their fields; a tagged struct as an array of properties,
-    /// and an array of them as an array of those; other arrays and raw values as `{"length": .., "bytes": "0a0b.."}`.
-    fn json_value(&self, value: &Value) -> Json {
-        let object = |object: ObjectRef| match object {
-            ObjectRef::Null => Json::Null,
-            _ => json!(self.package.reference(object)),
-        };
-        match value {
-            Value::Byte(v) => json!(v),
-            Value::Int(v) => json!(v),
-            Value::Bool(v) => json!(v),
-            Value::Float(v) => float(*v),
-            Value::Object(o) => object(*o),
-            Value::Name(name) => json!(name),
-            Value::Str(text) => json!(text),
-            Value::Delegate {
-                object: o,
-                function,
-            } => json!({ "object": object(*o), "function": function }),
-            Value::Vector { x, y, z } => json!({ "X": float(*x), "Y": float(*y), "Z": float(*z) }),
-            Value::Rotator { pitch, yaw, roll } => {
-                json!({ "Pitch": pitch, "Yaw": yaw, "Roll": roll })
+    /// T3D alone, without colour or tables.
+    fn t3d_plain(&self, out: &mut impl Write) -> io::Result<()> {
+        for (i, object) in self.objects.iter().enumerate() {
+            if i > 0 {
+                writeln!(out)?;
             }
-            Value::Color { r, g, b, a } => json!({ "B": b, "G": g, "R": r, "A": a }),
-            Value::Struct(properties) => self.json_properties(properties),
-            Value::StructArray(elements) => Json::Array(
-                elements
+            write_t3d(self.package, object, Style { color: false }, out)?;
+        }
+        Ok(())
+    }
+}
+
+/// An object as JSON: what `pkg obj --format json` prints for it.
+pub(super) fn object_json(package: &Package, object: &Object) -> Json {
+    let export = &package.exports()[object.export];
+    json!({
+        "index": ObjectRef::Export(object.export).raw(),
+        "reference": object.reference,
+        "class": package.class_name(export),
+        "path": package.full_path(ObjectRef::Export(object.export)),
+        "offset": export.serial_offset,
+        "size": object.size,
+        "properties": json_properties(package, &object.properties),
+        "native_size": object.native_size(),
+        "error": object.error.as_ref().map(|e| e.to_string()),
+    })
+}
+
+/// JSON as TOML, laid out the same: TOML has no null, so a field that's
+/// `null` is left out, and an element of an array that's `null` (no
+/// object) is an empty table.
+pub(super) fn toml_text(json: &Json) -> String {
+    fn value(json: &Json) -> Option<toml::Value> {
+        Some(match json {
+            Json::Null => return None,
+            Json::Bool(b) => toml::Value::Boolean(*b),
+            Json::Number(n) => match n.as_i64() {
+                Some(i) => toml::Value::Integer(i),
+                None => toml::Value::Float(n.as_f64().expect("a number")),
+            },
+            Json::String(s) => toml::Value::String(s.clone()),
+            Json::Array(items) => toml::Value::Array(
+                items
                     .iter()
-                    .map(|element| self.json_properties(element))
+                    .map(|item| value(item).unwrap_or(toml::Value::Table(toml::Table::new())))
                     .collect(),
             ),
-            Value::List(elements) => {
-                Json::Array(elements.iter().map(|e| self.json_value(e)).collect())
-            }
-            Value::Array { len, data } => json!({ "length": len, "bytes": hex_compact(data) }),
-            Value::Raw(bytes) => json!({ "bytes": hex_compact(bytes) }),
+            Json::Object(fields) => toml::Value::Table(
+                fields
+                    .iter()
+                    .filter_map(|(k, v)| Some((k.clone(), value(v)?)))
+                    .collect(),
+            ),
+        })
+    }
+    let table = match value(json) {
+        Some(toml::Value::Table(table)) => table,
+        _ => unreachable!("a JSON object"),
+    };
+    toml::to_string(&table).expect("TOML from JSON")
+}
+
+fn json_properties(package: &Package, properties: &[Property]) -> Json {
+    Json::Array(
+        properties
+            .iter()
+            .map(|p| {
+                let mut fields = Map::new();
+                fields.insert("name".into(), json!(p.name));
+                fields.insert("type".into(), json!(p.kind.name()));
+                if let Some(name) = &p.struct_name {
+                    fields.insert("struct".into(), json!(name));
+                }
+                fields.insert("index".into(), json!(p.array_index));
+                fields.insert("offset".into(), json!(p.offset));
+                fields.insert("size".into(), json!(p.size));
+                fields.insert("tag_size".into(), json!(p.tag_size));
+                fields.insert("value".into(), json_value(package, &p.value));
+                Json::Object(fields)
+            })
+            .collect(),
+    )
+}
+
+/// A value as JSON: numbers, booleans and strings as themselves; an
+/// object as its reference (or `null`); vectors, rotators and colours as
+/// objects of their fields; a tagged struct as an array of properties,
+/// and an array of them as an array of those; other arrays and raw values as `{"length": .., "bytes": "0a0b.."}`.
+fn json_value(package: &Package, value: &Value) -> Json {
+    let object = |object: ObjectRef| match object {
+        ObjectRef::Null => Json::Null,
+        _ => json!(package.reference(object)),
+    };
+    match value {
+        Value::Byte(v) => json!(v),
+        Value::Int(v) => json!(v),
+        Value::Bool(v) => json!(v),
+        Value::Float(v) => float(*v),
+        Value::Object(o) => object(*o),
+        Value::Name(name) => json!(name),
+        Value::Str(text) => json!(text),
+        Value::Delegate {
+            object: o,
+            function,
+        } => json!({ "object": object(*o), "function": function }),
+        Value::Vector { x, y, z } => json!({ "X": float(*x), "Y": float(*y), "Z": float(*z) }),
+        Value::Rotator { pitch, yaw, roll } => {
+            json!({ "Pitch": pitch, "Yaw": yaw, "Roll": roll })
         }
+        Value::Color { r, g, b, a } => json!({ "B": b, "G": g, "R": r, "A": a }),
+        Value::Struct(properties) => json_properties(package, properties),
+        Value::StructArray(elements) => Json::Array(
+            elements
+                .iter()
+                .map(|element| json_properties(package, element))
+                .collect(),
+        ),
+        Value::List(elements) => {
+            Json::Array(elements.iter().map(|e| json_value(package, e)).collect())
+        }
+        Value::Array { len, data } => json!({ "length": len, "bytes": hex_compact(data) }),
+        Value::Raw(bytes) => json!({ "bytes": hex_compact(bytes) }),
     }
 }
 

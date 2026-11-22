@@ -214,12 +214,17 @@ pub struct PkgObjArgs {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PkgObjFormat {
-    /// T3D, as UnrealEd exports objects; with `--property`, a table.
+    /// T3D, as UnrealEd exports objects, coloured on a terminal; with
+    /// `--property`, a table.
     Text,
+    /// T3D alone: without colour, and not a table with `--property`.
+    T3d,
     /// One property per line, after its object: `Texture'MyPkg.Brick' Format=5`.
     Concise,
     /// A JSON array of objects.
     Json,
+    /// TOML, laid out as the JSON: the objects are `objects`.
+    Toml,
 }
 
 #[derive(Debug, Args)]
