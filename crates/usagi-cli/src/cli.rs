@@ -166,7 +166,7 @@ pub struct PkgExportArgs {
     pub output: PathBuf,
 
     /// Where in the directory each object's files go.
-    #[arg(long, value_enum, default_value_t = PkgExportLayout::Flat)]
+    #[arg(long, value_enum, default_value_t = PkgExportLayout::Folder)]
     pub layout: PkgExportLayout,
 
     /// What to write objects' native data as.
@@ -225,12 +225,12 @@ pub enum PkgPropertiesFormat {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PkgExportLayout {
-    /// Every file in the directory, named as UnrealScript refers to the
-    /// object: `Texture'MyPkg.Walls.Brick'.bin`.
-    Flat,
     /// In folders for the package, the class and the groups:
     /// `MyPkg/Texture/Walls/Brick.bin`.
     Folder,
+    /// Every file in the directory, named as UnrealScript refers to the
+    /// object: `Texture'MyPkg.Walls.Brick'.bin`.
+    Flat,
 }
 
 #[derive(Debug, Args)]

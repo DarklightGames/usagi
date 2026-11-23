@@ -2810,10 +2810,10 @@ fn pkg_obj_other_types() {
 }
 
 /// `pkg export`, with the properties as T3D (which aren't written by
-/// default).
+/// default), every file in the directory.
 fn pkg_export(dir: &Path, args: &[&str]) -> assert_cmd::assert::Assert {
     usagi(dir)
-        .args(["pkg", "export", "--properties"])
+        .args(["pkg", "export", "--properties", "--layout", "flat"])
         .args(args)
         .assert()
 }
@@ -2935,19 +2935,20 @@ fn pkg_export_every_object() {
 #[test]
 fn pkg_export_folder_layout() {
     let dir = obj_dir();
-    pkg_export(
-        dir.path(),
-        &[
+    // The default layout.
+    usagi(dir.path())
+        .args([
+            "pkg",
+            "export",
+            "--properties",
             "MyPkg.utx",
             "--object",
             "MyPkg.**",
             "-o",
             "out",
-            "--layout",
-            "folder",
-        ],
-    )
-    .code(1);
+        ])
+        .assert()
+        .code(1);
     assert_eq!(
         files_under(&dir.path().join("out")),
         [
@@ -3009,7 +3010,10 @@ fn pkg_export_several_packages() {
         "usagi: Combiner'MyPkg.Mix' and Combiner'MyPkg.Mix' would both be written to \
              Combiner'MyPkg.Mix'\n",
     );
-    pkg_export(dir.path(), &[&args[..], &["--layout", "folder"]].concat())
+    usagi(dir.path())
+        .args(["pkg", "export"])
+        .args(args)
+        .assert()
         .code(2)
         .stderr(format!(
             "usagi: Combiner'MyPkg.Mix' and Combiner'MyPkg.Mix' would both be written to {}\n",
@@ -4242,7 +4246,7 @@ fn pkg_export_textures() {
             .args(args)
             .assert()
     };
-    let stderr = export(&["-o", "out", "--layout", "folder"])
+    let stderr = export(&["-o", "out"])
         .code(1)
         .stdout("Exported 11 objects (4 in a file format) to out\n")
         .get_output()
@@ -4268,7 +4272,7 @@ fn pkg_export_textures() {
         "{}",
         stderr
     );
-    // In folders: DXT as DDS, G16 as PNG, others as TGA.
+    // In folders, by default: DXT as DDS, G16 as PNG, others as TGA.
     let out = dir.path().join("out");
     assert_eq!(
         files_under(&out),
@@ -4422,6 +4426,7 @@ fn pkg_export_properties_formats() {
     let export = |args: &[&str]| {
         usagi(dir.path())
             .args(["pkg", "export", "MyPkg.utx", "--object", "MyPkg.UI.Bar"])
+            .args(["--layout", "flat"])
             .args(args)
             .assert()
     };

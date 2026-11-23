@@ -822,7 +822,7 @@ exported: they're only containers, and appear in the files' names or folders.
 | `-o`, `--output DIR` | The directory to write to. Required. |
 | `--object OBJECT,...` | The objects, as for `pkg obj`: `Texture'MyTex.Walls.Brick'`, or `MyTex.Walls.Brick`, with `*`, `**` and `?`. Can be given more than once. |
 | `--class CLASS,...` | Only objects of these classes, as for `pkg obj`. |
-| `--layout flat\|folder` | Where each object's files go. Default: `flat`. |
+| `--layout folder\|flat` | Where each object's files go. Default: `folder`. |
 | `--native auto\|png\|tga\|dds\|bin\|none` | What to write native data as. `auto`: in a file format where there's one, otherwise `.bin`. `tga`, `png`: as `auto`, but every texture in this format. `dds`: as `auto`, but only DXT textures, as DDS; any other texture is written as `.bin`, with a note. `bin`: always `.bin`. `none`: no native data. Default: `auto`. |
 | `--mips` | Write every mipmap of a texture written as PNG or TGA, each in its own file: the largest as `Brick.tga`, then `Brick.mip1.tga`, `Brick.mip2.tga`, .... DDS has every mipmap in one file anyway. |
 | `--raw` | Also write the native data as it is (`.bin`) for objects written in a file format. |
@@ -832,8 +832,8 @@ The layouts, for `Texture'MyTex.Walls.Brick'`:
 
 | Layout | Files |
 |---|---|
-| `flat` | `Texture'MyTex.Walls.Brick'.bin` (and `.t3d`, ...), named as UnrealScript refers to the object, all in the directory. |
 | `folder` | `MyTex/Texture/Walls/Brick.bin` (and `.t3d`, ...): a folder for the package, then the class, then each group. |
+| `flat` | `Texture'MyTex.Walls.Brick'.bin` (and `.t3d`, ...), named as UnrealScript refers to the object, all in the directory. |
 
 Both include everything that identifies an object (its package, class,
 groups and name), so two objects never share files. The engine allows two
