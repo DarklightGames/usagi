@@ -24,6 +24,7 @@ usagi pkg obj Textures/UI.utx "Texture'UI.HUD.*'" --property Format,LODSet
 | [`pkg obj`](#usagi-pkg-obj-path-objects) | Show objects' properties, as T3D or as a table. |
 | [`pkg export`](#usagi-pkg-export-paths---output-dir) | Write objects' native data and properties to files. |
 | [`pkg diff`](#usagi-pkg-diff-rev-rev----path) | Compare two versions of a package, in git revisions or files. |
+| [`pkg classes`](#usagi-pkg-classes-paths) | Count objects by class, and check that packages write back byte for byte. |
 | [`format`](#usagi-format) | Not implemented yet. |
 
 Every command that takes paths accepts files and directories. Directories are
@@ -1084,6 +1085,113 @@ problem is shown with the object (`Error (old): ...` in the text, a line
 starting with `!` in `concise`, `old_error` and `new_error` in JSON) and on
 standard error, and the command exits with code 1.
 
+### `usagi pkg classes <PATHS>...`
+
+A census of the classes in packages: for each class, how many objects there
+are and how many bytes their data takes, and the native class that stores
+their native data (the data after their properties), as
+[PACKAGE_FORMAT.md](PACKAGE_FORMAT.md#which-native-data-an-object-has)
+describes. With `--round-trip`, it checks that usagi writes every object's
+native data, and every package, back byte for byte.
+
+```sh
+usagi pkg classes Textures/MyTextures.utx
+usagi pkg classes --round-trip --humanize .        # every package under here
+usagi pkg classes --round-trip --format json Maps > census.json
+```
+
+| Flag | Meaning |
+|---|---|
+| `--round-trip` | Read every object's native data and write it again, where it is and moved to another offset, and write every package again (see below). |
+| `--humanize` | Sizes in units (`1.3 MB`) and counts with thousands separators. Text only. |
+| `--format text\|json` | How to print the counts. Default: `text`. |
+
+A path can be a package file, read whatever its extension, or a folder,
+searched (in name order, recursively) for files with a package's extension:
+`.u`, `.utx`, `.usx`, `.ukx`, `.uax`, `.umx`, `.rom`, `.ut2`, `.unr` or
+`.uz2` (in any case). Files are read in parallel. Classes are found as `pkg
+obj` finds them, through the `Paths` of the game each file is in.
+
+The text is a table, largest classes first, then the number of files, and
+any problems, one per line:
+
+```text
+  Class                      Objects     Bytes  Native data                Native bytes       Same
+  Engine.Texture              25,102   12.6 GB  Texture                         12.6 GB     25,102
+  Engine.StaticMeshInstance 2,516,481    3.3 GB  StaticMeshInstance               3.3 GB  2,516,481
+  Engine.StaticMeshActor    2,455,816  294.3 MB  Object                              0 B  2,455,816
+
+1,691 files; 1,691 written back the same
+```
+
+- **Native data** is the native class whose `Serialize` writes the objects'
+  native data: `Object` for none (an actor's, a material's), `unread` for a
+  native class whose data usagi doesn't read, or `not found` if the class,
+  or one of its superclasses, can't be found; the last two name it in
+  brackets.
+- **Native bytes** (with `--round-trip`) is how much of the data is native
+  data: what's left after the state frame and the properties.
+- **Same**, **Different** and **Failed** (with `--round-trip`) count the
+  objects whose native data wrote back the same, differently, or couldn't
+  be read. Objects with no data, and of classes that are unread or not
+  found, aren't counted.
+
+With `--round-trip`, each object's native data is read as its native class
+stores it, written again at the same offset in the file, and compared with
+the original bytes; then written at another offset, read back from there,
+and written at the original offset, which must give the original bytes
+again (this checks that lazy arrays' absolute offsets are worked out right
+when an object moves). Each package is then written as the engine lays it
+out, and compared with the file. Problems are listed after the table:
+
+```text
+./Long.utx: Palette'Long.Pal': its native data (Palette) writes back differently from offset 1
+./Short.utx: Palette'Short.Pal': invalid data at offset 4: the data ends in the native data
+./Tail.utx: the package writes back differently from offset 480
+./Old.utx: the package can't be written: invalid data at offset 0: packages before version 68 aren't written
+```
+
+A file that can't be read is also a problem. A package that wasn't saved by
+the engine (with bytes after its export table, say) writes back differently,
+since it's written as the engine would write it.
+
+The JSON is an object:
+
+```json
+{
+  "files": 1,
+  "packages_written_same": 1,
+  "classes": [
+    {
+      "class": "Engine.Palette",
+      "objects": 1,
+      "bytes": 6,
+      "native": "Palette",
+      "round_trip": { "native_bytes": 5, "same": 1, "different": 0, "failed": 0 }
+    },
+    {
+      "class": "Engine.Animation",
+      "objects": 1,
+      "bytes": 1,
+      "native": "unread",
+      "native_path": "Engine.Animation",
+      "round_trip": { "native_bytes": 0, "same": 0, "different": 0, "failed": 0 }
+    }
+  ],
+  "problems": [
+    { "file": "Long.utx", "object": "Palette'Long.Pal'", "message": "..." },
+    { "file": "Tail.utx", "message": "..." }
+  ]
+}
+```
+
+`packages_written_same` and `round_trip` are only there with
+`--round-trip`; `native_path` only for `unread` and `not found`, and a
+problem's `object` only for an object.
+
+With `--round-trip`, the command exits with code 1 if there's a problem.
+Without it, problems are listed but don't change the exit code.
+
 ### Global flags
 
 | Flag | Meaning |
@@ -1099,7 +1207,7 @@ machine unresponsive.
 
 ## Output formats
 
-These are the formats of `lint` and `parse`. For `pkg list`, `pkg obj`, `pkg export` and `pkg diff`,
+These are the formats of `lint` and `parse`. For `pkg list`, `pkg obj`, `pkg export`, `pkg diff` and `pkg classes`,
 see [their](#usagi-pkg-list-path) [sections](#usagi-pkg-obj-path-objects).
 
 | Format | Output |
@@ -1124,8 +1232,8 @@ Besides lint codes, a problem's code can be `parse` (a recovered problem),
 | 0 | Nothing to report. Recovered problems alone don't count, unless `--strict` is used. |
 | 1 | `lint`: a lint problem, or a file that failed to parse; with `--fix`, a problem left after fixing; with `--diff`, a change to show. `parse`: a file that failed to parse. |
 | 1 | `build`: a package failed to compile, or a source file failed to parse. |
-| 1 | `pkg obj`, `pkg export`, `pkg diff`: an object whose data is malformed. `pkg diff --exit-code`: the packages differ. |
-| 2 | A usage error, a configuration error or a missing path. `pkg list`, `pkg flags`, `pkg obj`, `pkg export`, `pkg diff`: a file that can't be read or isn't a valid package; `pkg flags`: an official package without `--force`; `pkg obj`, `pkg export`: an object that isn't in the package (for `pkg export`, in any of them) or isn't of the class given, or an invalid object reference; `pkg export`: the same package given twice, or files that can't be written. `pkg diff`: an argument that's neither a file nor a git revision, more than two revisions, a path outside the repository or not in a revision, a package that isn't stored locally (offline, an object in Git LFS that isn't in the cache, or a Git LFS pointer in the working tree), an object without wildcards that's in neither package, or `git` failing to read a file. `build`: a setup problem, such as a missing folder, or a locked package that would have to be rebuilt. |
+| 1 | `pkg obj`, `pkg export`, `pkg diff`: an object whose data is malformed. `pkg diff --exit-code`: the packages differ. `pkg classes --round-trip`: an object or package that doesn't write back the same, or a file that can't be read. |
+| 2 | A usage error, a configuration error or a missing path (for `pkg classes` too). `pkg list`, `pkg flags`, `pkg obj`, `pkg export`, `pkg diff`: a file that can't be read or isn't a valid package; `pkg flags`: an official package without `--force`; `pkg obj`, `pkg export`: an object that isn't in the package (for `pkg export`, in any of them) or isn't of the class given, or an invalid object reference; `pkg export`: the same package given twice, or files that can't be written. `pkg diff`: an argument that's neither a file nor a git revision, more than two revisions, a path outside the repository or not in a revision, a package that isn't stored locally (offline, an object in Git LFS that isn't in the cache, or a Git LFS pointer in the working tree), an object without wildcards that's in neither package, or `git` failing to read a file. `build`: a setup problem, such as a missing folder, or a locked package that would have to be rebuilt. |
 
 ## Configuration
 

@@ -1,5 +1,6 @@
 //! `usagi pkg`: inspect package files.
 
+pub mod classes;
 pub mod diff;
 pub mod export;
 pub mod game;

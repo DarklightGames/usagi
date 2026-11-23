@@ -12,7 +12,7 @@ static analysis on it, building mods with UCC, and reading package files:
 | `crates/usagi-core` | The library (`usagi_core`): parser, AST, symbol table and lints. |
 | `crates/usagi-pkg` | The package reader (`usagi_pkg`). See [Packages](#packages). |
 | `crates/usagi-io` | Exporting package data to file formats (`usagi_io`): asset models, adapters from `usagi-pkg`'s types, and writers. See [Exporting](#exporting). |
-| `crates/usagi-cli` | The `usagi` binary: `parse`, `lint` (and `lint rule`), `build` (in `src/build/`), `pkg` (in `src/pkg/`; `pkg obj` in `obj.rs`, `pkg export` in `export.rs`, `pkg diff` in `diff.rs`, and finding a game's `Paths` in `game.rs`) and configuration files. Its tests are in `tests/cli.rs`. |
+| `crates/usagi-cli` | The `usagi` binary: `parse`, `lint` (and `lint rule`), `build` (in `src/build/`), `pkg` (in `src/pkg/`; `pkg obj` in `obj.rs`, `pkg export` in `export.rs`, `pkg diff` in `diff.rs`, `pkg classes` in `classes.rs`, and finding a game's `Paths` in `game.rs`) and configuration files. Its tests are in `tests/cli.rs`. |
 
 Paths below are relative to `crates/usagi-core`.
 
@@ -120,22 +120,34 @@ document, update the document in the same change.
 | `src/uz2.rs` | Decompressing and compressing `.uz2` files. |
 | `src/edit.rs` | Changing package files in place (`set_package_flags`). |
 | `src/properties.rs` | Objects' tagged properties (`Package::properties`), read by their declarations when they can be found, and their values as T3D. |
-| `src/archive.rs` | `Archive` and `Serialize`: native data read and written by one function per type, as the engine does (`Loader`, `Saver`), `FString` and `LazyArray`. |
+| `src/archive.rs` | `Archive` and `Serialize`: native data read and written by one function per type, as the engine does (`Loader`, `Saver`), `FString`, `LazyArray`, `Index` (`AR_INDEX`), `TArray` as `Vec`, and `native_struct!`, which declares a struct whose fields are written in order. |
+| `src/math.rs` | The engine's maths types (`FVector`, `FPlane`, `FSphere`, `FBox`, `FCoords`, `FMatrix`, `FColor`, ...). |
 | `src/class.rs` | Classes, states, functions, structs, property declarations, enums, constants and text buffers (`Package::class`, `Package::read_native`). |
 | `src/script.rs` | UnrealScript bytecode (`Script`, `Expr`). |
-| `src/media.rs` | Textures', sounds' and sound groups' native data (`Texture`, `Mipmap`, `Sound`, `SoundGroup`). |
+| `src/media.rs` | Textures', palettes', fonts', sounds', sound groups', procedural sounds', fire textures' and prefabs' native data (`Texture`, `Mipmap`, `Palette`, `Font`, `Sound`, `SoundGroup`, `ProceduralSound`, `FireTexture`, `Prefab`). |
+| `src/mesh.rs` | Primitives', static meshes' (and their instances'), Karma collision's, convex volumes', LOD, skeletal and vertex meshes' and animations' native data. |
+| `src/model.rs` | BSP models' and brushes' polygons' native data (`Model`, `Polys`). |
+| `src/level.rs` | Levels' and terrain's native data (`Level`, `TerrainInfo`, `TerrainSector`, `TerrainPrimitive`). |
+| `src/native.rs` | Which native class stores an object's native data (`NativeClass`, `Packages::native_class`), reading and writing it (`Native`, `Package::native_data`), and the round-trip check (`Package::round_trip`). Add a class with a row in its `CLASSES` table. |
+| `src/write.rs` | Writing a package in the engine's layout (`Package::write_with`, `Packages::write`), writing again the native data of exports that move and hold absolute offsets. |
 | `src/diff.rs` | Comparing two versions of a package (`diff`), for `pkg diff`. |
 | `src/volatile.rs` | Properties whose saved value the engine never uses (`VOLATILE_PROPERTIES`), which `pkg diff` shows only with `--all`. Add one with a row in its table, citing where in the engine's source the value is worked out. |
 | `src/packages.rs` | `Packages`: finding packages by a game's `Paths`, resolving imports, and finding properties' declarations. |
 | `src/pattern.rs` | Object references and globs (`ObjectPattern`), and finding the objects they match. |
-| `src/package.rs` | `Package`: reads a file (decompressing a `.uz2`), keeps its exports' data, and looks up names, paths, outers and references. |
+| `src/package.rs` | `Package`: reads a file (decompressing a `.uz2`), keeps its bytes, and looks up names, paths, outers and references. |
 | `src/reader.rs` | The byte cursor: integers, compact indices and strings. |
 | `src/error.rs` | `Error`. |
 | `tests/` | Integration tests; `tests/common/mod.rs` writes packages (summary, tables and data) and `.uz2` files, and `tests/common/builder.rs` builds packages whose classes, properties and objects refer to each other. |
 
 Read the package exactly as the engine does (`ULinkerLoad` in
 `Core/Src/UnLinker.cpp`), including what it accepts that looks wrong, and
-reject only what it would fail on. The crate has 100% line, region and
+reject only what it would fail on. Every class's native data is read and
+written by one `Serialize` that mirrors the engine's, so that what's read
+writes back the same; check a change with `usagi pkg classes --round-trip`
+over a whole install, which must still report every object and package as
+written back the same. Keep generic functions in `src/archive.rs` free of
+branches that only some types take: llvm-cov counts a generic function's
+best-covered instantiation, not all of them together. The crate has 100% line, region and
 function coverage from its own tests (`cargo llvm-cov --summary-only -p
 usagi-pkg --all-features`); keep it that way, as for the parser.
 

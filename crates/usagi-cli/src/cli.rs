@@ -72,6 +72,44 @@ pub enum PkgCommand {
     /// imports, and the objects added, removed or changed (their flags,
     /// sizes, properties and native data).
     Diff(PkgDiffArgs),
+    /// Count the objects and bytes of each class in packages, with the
+    /// native class that stores each one's data and whether usagi reads it;
+    /// with `--round-trip`, check that every object's native data, and
+    /// every package, writes back byte for byte.
+    Classes(PkgClassesArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PkgClassesArgs {
+    /// Package files, or folders to search for them (by their extensions:
+    /// `.u`, `.utx`, `.usx`, `.ukx`, `.uax`, `.umx`, `.rom`, `.ut2`, `.unr`
+    /// and `.uz2`).
+    #[arg(required = true)]
+    pub paths: Vec<PathBuf>,
+
+    /// Read every object's native data and write it again where it is, and
+    /// write every package again: each must give the same bytes. Lists the
+    /// objects and packages that don't, and exits with code 1 if there are
+    /// any.
+    #[arg(long)]
+    pub round_trip: bool,
+
+    /// Show sizes in units (`1.3 MB`) and counts with thousands separators
+    /// (`15,530`), in the text format.
+    #[arg(long)]
+    pub humanize: bool,
+
+    /// How to print the counts.
+    #[arg(long, value_enum, default_value_t = PkgClassesFormat::Text)]
+    pub format: PkgClassesFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PkgClassesFormat {
+    /// A table, largest classes first, then any problems.
+    Text,
+    /// A JSON object.
+    Json,
 }
 
 #[derive(Debug, Args)]

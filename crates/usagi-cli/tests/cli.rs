@@ -4146,3 +4146,216 @@ fn pkg_obj_t3d_and_toml() {
         without_nulls(serde_json::json!({ "objects": json }))
     );
 }
+
+const CLASSES_NAMES: &[&str] = &[
+    "None",
+    "Core",
+    "Package",
+    "Class",
+    "Engine",
+    "Texture",
+    "Palette",
+    "Animation",
+    "Missing",
+    "Gone",
+    "Tex",
+    "Pal",
+    "Anim",
+    "Orphan",
+    "Group",
+    "MyClass",
+    "USize",
+];
+
+fn classes_name(text: &str) -> i32 {
+    CLASSES_NAMES.iter().position(|n| *n == text).unwrap() as i32
+}
+
+/// A package with a group, a class, a texture, a palette `palette` (its
+/// data after its `None`), an object of a class whose data isn't read, and
+/// one of a class that can't be found.
+fn classes_package(palette: &[u8]) -> Vec<u8> {
+    let n = classes_name;
+    let imports = [
+        (n("Core"), n("Package"), 0, n("Core")),
+        (n("Core"), n("Package"), 0, n("Engine")),
+        (n("Core"), n("Class"), -2, n("Texture")),
+        (n("Core"), n("Class"), -2, n("Palette")),
+        (n("Core"), n("Class"), -2, n("Animation")),
+        (n("Core"), n("Package"), 0, n("Missing")),
+        (n("Core"), n("Class"), -6, n("Gone")),
+        (n("Core"), n("Class"), -1, n("Package")),
+    ];
+    let mut class = vec![0, 0, 0, 0];
+    class.extend(compact_index(n("MyClass")));
+    class.extend([0; 12 + 4 + 8 + 8 + 2 + 4 + 4 + 16]);
+    class.extend([0, 0, 0, 0, 0]);
+    class.push(0);
+    let flags = 0x00070004;
+    package_file(
+        CLASSES_NAMES,
+        &imports,
+        &[
+            (-8, 0, n("Group"), flags, vec![0]),
+            (0, 0, n("MyClass"), flags, class),
+            // No mipmaps.
+            (-3, 1, n("Tex"), flags, vec![0, 0]),
+            (-4, 0, n("Pal"), flags, [&[0], palette].concat()),
+            (-5, 0, n("Anim"), flags, vec![0]),
+            (-7, 0, n("Orphan"), flags, vec![0]),
+        ],
+    )
+}
+
+fn pkg_classes(dir: &Path, args: &[&str]) -> std::process::Output {
+    usagi(dir)
+        .args(["pkg", "classes", "--color", "never"])
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn pkg_classes_counts_objects_by_class() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("Textures")).unwrap();
+    fs::write(
+        dir.path().join("Textures/MyPkg.utx"),
+        classes_package(&[1, 1, 2, 3, 4]),
+    )
+    .unwrap();
+    fs::write(dir.path().join("Textures/notes.txt"), "not a package").unwrap();
+    let output = pkg_classes(dir.path(), &["Textures"]);
+    assert_eq!(output.status.code(), Some(0), "{:?}", output);
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        out,
+        [
+            "  Class             Objects  Bytes  Native data",
+            "  Core.Class              1     69  Class",
+            "  Engine.Palette          1      6  Palette",
+            "  Engine.Texture          1      2  Texture",
+            "  Core.Package            1      1  Object",
+            "  Engine.Animation        1      1  unread (Engine.Animation)",
+            "  Missing.Gone            1      1  not found (Missing.Gone)",
+            "",
+            "1 file",
+            "",
+        ]
+        .join("\n")
+    );
+}
+
+/// The cells of the row for `class` in `pkg classes`' table.
+fn class_row<'a>(out: &'a str, class: &str) -> Vec<&'a str> {
+    out.lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .find(|cells| cells.first() == Some(&class))
+        .unwrap_or_else(|| panic!("no {} in\n{}", class, out))
+}
+
+#[test]
+fn pkg_classes_round_trip() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("Good.utx"),
+        classes_package(&[1, 1, 2, 3, 4]),
+    )
+    .unwrap();
+    let output = pkg_classes(dir.path(), &["--round-trip", "Good.utx"]);
+    assert_eq!(output.status.code(), Some(0), "{:?}", output);
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        class_row(&out, "Engine.Palette"),
+        ["Engine.Palette", "1", "6", "Palette", "5", "1"]
+    );
+    assert_eq!(
+        class_row(&out, "Core.Class"),
+        ["Core.Class", "1", "69", "Class", "68", "1"]
+    );
+    assert!(
+        out.ends_with("1 file; 1 written back the same\n"),
+        "{}",
+        out
+    );
+
+    // A count written in more bytes than it needs reads the same but
+    // writes back shorter; data cut short can't be read; a file that isn't
+    // a package; and a package that isn't laid out as the engine lays it
+    // out.
+    fs::write(
+        dir.path().join("Long.utx"),
+        classes_package(&[0x41, 0, 1, 2, 3, 4]),
+    )
+    .unwrap();
+    fs::write(dir.path().join("Short.utx"), classes_package(&[1, 1, 2])).unwrap();
+    fs::write(dir.path().join("Bad.utx"), "not a package").unwrap();
+    // Bytes after the export table, which a package written again doesn't
+    // have.
+    let mut tail = classes_package(&[1, 1, 2, 3, 4]);
+    tail.extend([0; 4]);
+    fs::write(dir.path().join("Tail.utx"), &tail).unwrap();
+    // Old packages aren't written: version 67, whose summary has an empty
+    // heritage table where the GUID and generations would be.
+    let mut old = classes_package(&[1, 1, 2, 3, 4]);
+    old[4] = 67;
+    old[36..44].fill(0);
+    fs::write(dir.path().join("Old.utx"), &old).unwrap();
+    let output = pkg_classes(dir.path(), &["--round-trip", "--humanize", "."]);
+    assert_eq!(output.status.code(), Some(1), "{:?}", output);
+    let out = String::from_utf8(output.stdout).unwrap();
+    for expected in [
+        "./Bad.utx: not an Unreal package",
+        "./Long.utx: Palette'Long.Pal': its native data (Palette) writes back differently from offset 1",
+        "./Short.utx: Palette'Short.Pal': invalid data at offset 4: the data ends in the native data",
+        "./Old.utx: the package can't be written: invalid data at offset 0: packages before version 68 aren't written",
+        "./Tail.utx: the package writes back differently from offset 480",
+        "6 files; 3 written back the same",
+    ] {
+        assert!(out.contains(expected), "{}\n{}", expected, out);
+    }
+
+    // As JSON.
+    let output = pkg_classes(
+        dir.path(),
+        &["--round-trip", "--format", "json", "Long.utx"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{:?}", output);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["files"], 1);
+    assert_eq!(json["packages_written_same"], 1);
+    let palette = json["classes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["class"] == "Engine.Palette")
+        .unwrap();
+    assert_eq!(palette["native"], "Palette");
+    assert_eq!(palette["round_trip"]["different"], 1);
+    let unread = json["classes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["class"] == "Engine.Animation")
+        .unwrap();
+    assert_eq!(unread["native"], "unread");
+    assert_eq!(unread["native_path"], "Engine.Animation");
+    assert_eq!(json["problems"][0]["object"], "Palette'Long.Pal'");
+}
+
+#[test]
+fn pkg_classes_errors() {
+    let dir = TempDir::new().unwrap();
+    let output = pkg_classes(dir.path(), &["Missing.utx"]);
+    assert_eq!(output.status.code(), Some(2), "{:?}", output);
+    let err = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        err.contains("Missing.utx: no such file or folder"),
+        "{}",
+        err
+    );
+    // Without `--round-trip`, problems don't change the exit code.
+    fs::write(dir.path().join("Bad.utx"), "not a package").unwrap();
+    let output = pkg_classes(dir.path(), &["Bad.utx"]);
+    assert_eq!(output.status.code(), Some(0), "{:?}", output);
+}
