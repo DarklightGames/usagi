@@ -128,7 +128,7 @@ document, update the document in the same change.
 | `src/volatile.rs` | Properties whose saved value the engine never uses (`VOLATILE_PROPERTIES`), which `pkg diff` shows only with `--all`. Add one with a row in its table, citing where in the engine's source the value is worked out. |
 | `src/packages.rs` | `Packages`: finding packages by a game's `Paths`, resolving imports, and finding properties' declarations. |
 | `src/pattern.rs` | Object references and globs (`ObjectPattern`), and finding the objects they match. |
-| `src/package.rs` | `Package`: reads a file (decompressing a `.uz2`) into memory, or maps it (`Package::map`, `unsafe`: the file mustn't change while it's mapped, and on Windows can't be replaced meanwhile), keeps its exports' data, and looks up names, paths, outers and references. |
+| `src/package.rs` | `Package`: reads a file (decompressing a `.uz2`) into memory, or maps it (`Package::map`, `unsafe`: the file mustn't change while it's mapped, and on Windows can't be replaced meanwhile; only `pkg export` uses it), keeps its exports' data, and looks up names, paths, outers and references. |
 | `src/reader.rs` | The byte cursor: integers, compact indices and strings. |
 | `src/error.rs` | `Error`. |
 | `tests/` | Integration tests; `tests/common/mod.rs` writes packages (summary, tables and data) and `.uz2` files, and `tests/common/builder.rs` builds packages whose classes, properties and objects refer to each other. |

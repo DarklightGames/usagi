@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 use std::rc::Rc;
 
+use rayon::prelude::*;
+
 use usagi_io::{Audio, DdsWriter, Image, PngWriter, TgaWriter, Unusable, WavWriter, Writer};
 use usagi_pkg::{
     ObjectPattern, ObjectRef, Package, Packages, Palette, SearchPath, Sound, TEXTURE_MIPS_VERSION,
@@ -38,10 +40,11 @@ type Problem = (String, bool);
 /// texture as `.dds`, `.tga` or `.png`),
 /// otherwise as it is (`.bin`); and if asked, its properties (`.t3d`,
 /// `.json` or `.toml`).
-/// Returns whether every object could be exported; problems are written to
-/// `err`.
+/// Objects are converted and written on `threads` threads. Returns whether
+/// every object could be exported; problems are written to `err`.
 pub fn export(
     args: &PkgExportArgs,
+    threads: usize,
     out: &mut impl Write,
     err: &mut impl Write,
 ) -> Result<bool, String> {
@@ -50,14 +53,33 @@ pub fn export(
             "nothing to write: `--native none` without `--properties` writes no files".to_string(),
         );
     }
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads.max(1))
+        .build()
+        .map_err(|e| e.to_string())?;
+    // The files are read on the worker threads, which is most of the time
+    // a large export takes when it isn't writing.
+    let read: Vec<Result<Package, String>> = pool.install(|| {
+        args.paths
+            .par_iter()
+            .map(|path| {
+                // SAFETY: the files are only read, for as long as the export
+                // takes, and the export never writes to them (its files have
+                // other names). Another program changing one meanwhile is a
+                // risk taken for the speed: see `Package::map`.
+                unsafe { Package::map(path) }.map_err(|e| format!("{}: {}", path.display(), e))
+            })
+            .collect()
+    });
     // One set of packages per game, so each package is read once.
     let mut games: HashMap<Vec<SearchPath>, Rc<Packages>> = HashMap::new();
     let inputs = args
         .paths
         .iter()
-        .map(|path| {
+        .zip(read)
+        .map(|(path, package)| {
             let file = path.display().to_string();
-            let package = Package::read(path).map_err(|e| format!("{}: {}", file, e))?;
+            let package = package?;
             let packages = Rc::clone(
                 games
                     .entry(super::game::search_paths(path))
@@ -116,8 +138,9 @@ pub fn export(
         return Err(collisions.join("\n"));
     }
 
-    // What needs the game's packages is worked out first; then each
-    // object's data is read, converted and written.
+    // What needs the game's packages (shared, and not thread-safe) is
+    // worked out first; reading, converting and writing each object's data
+    // then runs on worker threads.
     let jobs: Vec<Job> = exports
         .iter()
         .zip(destinations)
@@ -131,7 +154,8 @@ pub fn export(
         })
         .collect();
     let outcomes: Vec<Result<Outcome, String>> =
-        jobs.iter().map(|job| export_one(job, args)).collect();
+        pool.install(|| jobs.par_iter().map(|job| export_one(job, args)).collect());
+    // Notes in the order of the objects, whichever finished first.
     let mut converted = 0;
     for outcome in outcomes {
         let outcome = outcome?;

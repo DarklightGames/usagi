@@ -846,6 +846,11 @@ exits with code 2.
 (exit code 2). A class's properties are its default properties, and its
 `.bin` is empty, since its own data comes before them.
 
+The package files are read, and the objects converted and written, on
+several threads at once: as many as `-j`/`--jobs` says (by default, half the
+logical CPUs). The notes on standard error still come in the order of the
+objects.
+
 If an object's native data can't be written in its format, it's written as
 `.bin` instead, and a note says why on standard error: a sound that isn't a
 WAV file (`it isn't a WAV file, and converting it isn't supported; written as
@@ -1108,7 +1113,7 @@ standard error, and the command exits with code 1.
 | `--config FILE` | Use this configuration file. |
 | `--no-config` | Don't read a configuration file. |
 | `--color auto\|always\|never` | When to use colour. `auto` uses colour on a terminal, unless `NO_COLOR` is set. |
-| `-j N`, `--jobs N` | How many files to parse, or UCC processes to run (`build --dumpint`), at once. Overrides `jobs`. Default: half the logical CPUs. |
+| `-j N`, `--jobs N` | How many files to parse, packages to read and objects to export (`pkg export`), or UCC processes to run (`build --dumpint`), at once. Overrides `jobs`. Default: half the logical CPUs. |
 
 The worker threads, and the UCC processes they start, run at a lower priority
 (nice 10) on Linux and macOS, so that a big run doesn't make the rest of the
