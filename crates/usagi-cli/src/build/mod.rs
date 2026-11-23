@@ -18,6 +18,7 @@
 //! `--ignore-dependencies` is given. Locked packages (`build.locked`) are
 //! never deleted or rebuilt; a build that would have to is an error.
 
+mod diagnostic;
 pub mod ini;
 mod manifest;
 mod progress;
@@ -354,7 +355,11 @@ pub fn run(options: &Options) -> Result<bool, String> {
     if options.debug {
         make_args.push("-debug".to_string());
     }
-    let status = ucc.run_streaming(&make_args, &mut |line| reporter.ucc_line(line))?;
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let mut rewriter = diagnostic::Rewriter::new(packages.iter().flat_map(|p| &p.files), cwd);
+    let status = ucc.run_streaming(&make_args, &mut |line| {
+        reporter.ucc_line(&rewriter.rewrite(line))
+    })?;
 
     // Dumping localization overwrites UCC.log, which editors read for errors.
     let log_path = find_ci(&sys_dir, "UCC.log");

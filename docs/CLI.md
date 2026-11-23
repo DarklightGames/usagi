@@ -207,6 +207,42 @@ each package to compile and why, UCC's output apart from its progress
 messages, and at the end `Build: N succeeded, N failed, 0 skipped, N
 up-to-date`.
 
+In either view, and with `--verbose`, UCC's errors and warnings are
+rewritten as `path:line: error: message` (or `warning:`), which terminals
+and editors can link to:
+
+```
+MyMod/Classes/Foo.uc:12: error: Bad or missing expression in 'If'
+MyMod/Classes/Foo.uc:87: error: defaultproperties: Unknown property in defaults: Bar=1
+```
+
+- The path is the source file on this machine, relative to the current
+  directory if it's under it. Under Wine, UCC prints Windows paths
+  (`Z:\home\...\Foo.uc`). The file is found among the sources of the
+  packages being built, or else through Wine's drives
+  (`$WINEPREFIX/dosdevices`, by default `~/.wine/dosdevices`). A path that
+  can't be found is shown as UCC printed it.
+- UCC reports every `defaultproperties` problem on line 1, with
+  ` : defaultproperties` after the line and the class's path at the start of
+  the message (`MyMod.Foo: `). The rewritten line has `defaultproperties: `
+  at the start of the message instead, and the line it quotes: the whole
+  line (`Unknown property in defaults: Bar=1`) or the value
+  (`FloatProperty::ImportText failed in: abc`, or one in quotes, as in
+  `unresolved reference to '...'`); for `redundant data`, the second line
+  that sets the value; for `Unknown member X`, the struct value that sets
+  `X`. For a message that quotes none of these, it's the line of the `defaultproperties` keyword.
+- Some builds of UCC, such as Red Orchestra's, print `defaultproperties`
+  problems with no file, line or severity
+  (`MyMod.Foo: Unknown property in defaults: Bar=1`). These are recognised
+  by the importer's wording while UCC is importing a class's defaults (after
+  `Importing Defaults for Foo`), and shown the same way, in the class's file.
+  Most are errors; `Missing '='`, `Missing ')'` and `Bad quoted string` are
+  warnings.
+- UCC's `Error` is an error; its `Warning`, `ExecWarning` and
+  `ScriptWarning` are warnings.
+
+`System/UCC.log` keeps UCC's own output.
+
 On a terminal, or with `--progress always`, it shows live progress instead:
 
 ```

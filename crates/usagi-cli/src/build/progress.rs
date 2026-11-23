@@ -575,7 +575,7 @@ impl Live {
 }
 
 /// A UCC heading's package: `Pkg` from `---- Pkg - Release ----`.
-fn heading(line: &str) -> Option<&str> {
+pub(super) fn heading(line: &str) -> Option<&str> {
     let text = line.trim().strip_prefix("---")?.trim_matches('-').trim();
     let (package, kind) = text.rsplit_once(" - ")?;
     matches!(kind, "Release" | "Debug").then_some(package.trim())

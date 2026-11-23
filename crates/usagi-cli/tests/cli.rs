@@ -407,8 +407,11 @@ fn fix_keeps_utf16() {
 /// A fake UCC, run by `sh` in place of Wine. `make` logs a heading for each
 /// package, as the real one does, and "compiles" each one that isn't compiled
 /// yet (logging `Parsing` and `Compiling` for each class), unless it has a
-/// `Broken.uc`, and logs what it compiled to `made.log`. With `-mod=`, the packages are the `+EditPackages`
-/// of the mod's `Default.ini`, compiled ones are in the mod's System folder,
+/// `Broken.uc`, and logs what it compiled to `made.log`. A `Broken.uc` gets
+/// an error with a Windows path, as under Wine, and, if it has `Bogus`, a
+/// `defaultproperties` error with no file or severity, as Red Orchestra's
+/// UCC reports them. With `-mod=`,
+/// the packages are the `+EditPackages` of the mod's `Default.ini`, compiled ones are in the mod's System folder,
 /// and new ones are written to `System/`; with `-ini=`, the packages are that
 /// INI's `EditPackages`, all in `System/`. `dumpint` writes the package's
 /// `.int`, and fails with the error that the real DumpInt reports for its own
@@ -443,7 +446,12 @@ if [ "$cmd" = Editor.MakeCommandlet ]; then
     for f in ../$p/Classes/*.uc; do echo "Parsing $(basename "$f" .uc)"; done
     for f in ../$p/Classes/*.uc; do echo "Compiling $(basename "$f" .uc)"; done
     if [ -e ../$p/Classes/Broken.uc ]; then
-      echo "$p.uc(1) : Error, broken"
+      file="Z:$(cd .. && pwd | tr / '\\')\\$p\\Classes\\Broken.uc"
+      printf '%s\r\n' "$file(2) : Error, broken"
+      if grep -q Bogus ../$p/Classes/Broken.uc; then
+        echo "Importing Defaults for Broken"
+        printf '%s\r\n' "$p.Broken: Unknown property in defaults:     Bogus=1"
+      fi
     else
       echo "$p" > $p.u
       echo "$p" >> ../made.log
@@ -574,12 +582,26 @@ fn build_retries_packages_that_failed() {
     made(root);
     fs::write(
         root.join("A/Classes/Broken.uc"),
-        "class Broken extends Object;\n",
+        "class Broken extends Object;\n\ndefaultproperties\n{\n    Bogus=1\n}\n",
     )
     .unwrap();
     let (code, out) = build(root, &[]);
     assert_eq!(code, 1, "{}", out);
-    assert!(out.contains("A.uc(1) : Error, broken"), "{}", out);
+    // UCC's Windows paths are this machine's, relative to the current
+    // directory, and a `defaultproperties` error is on the line it quotes.
+    assert!(
+        out.contains("A/Classes/Broken.uc:2: error: broken"),
+        "{}",
+        out
+    );
+    assert!(
+        out.contains(
+            "A/Classes/Broken.uc:5: error: defaultproperties: Unknown property in defaults:     Bogus=1"
+        ),
+        "{}",
+        out
+    );
+    assert!(!out.contains("Z:"), "{}", out);
     assert!(out.contains("2 succeeded, 1 failed"), "{}", out);
     assert_eq!(made(root), "B\nC\n");
 
@@ -662,7 +684,11 @@ fn build_live_progress_collects_errors() {
     assert!(out.contains("+ B "), "{}", out);
     // The errors are printed at the end, under their package.
     let errors = out.find("-- A ---").expect(&out);
-    assert!(out[errors..].contains("A.uc(1) : Error, broken"), "{}", out);
+    assert!(
+        out[errors..].contains("A/Classes/Broken.uc:2: error: broken"),
+        "{}",
+        out
+    );
     assert!(out.contains("Build failed"), "{}", out);
     assert!(
         out.contains("2 compiled · 1 failed · 0 up to date"),

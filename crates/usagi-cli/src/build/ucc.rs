@@ -50,12 +50,20 @@ fn dumpint_succeeded(status_ok: bool, output: &str) -> bool {
     errors == Some(1) && output.lines().any(is_dumpint_self_match)
 }
 
-/// The ANSI colour for a line of UCC output, if it's an error or warning.
+/// The ANSI colour for a line of UCC output, if it's an error or warning:
+/// one rewritten as `path:line: error: message`, or one of UCC's own.
 pub fn line_color(line: &str) -> Option<&'static str> {
     let line = line.trim_start();
-    if line.contains(": Error") || line.starts_with("Error") || line.starts_with("Failure") {
+    if line.contains(": error: ")
+        || line.contains(": Error")
+        || line.starts_with("Error")
+        || line.starts_with("Failure")
+    {
         Some("91")
-    } else if line.contains(": Warning") || line.starts_with("Warning") {
+    } else if line.contains(": warning: ")
+        || line.contains("Warning, ")
+        || line.starts_with("Warning")
+    {
         Some("93")
     } else {
         None
@@ -227,6 +235,9 @@ mod tests {
         assert!(!is_noise(r"Z:\Foo\Classes\A.uc(3) : Error, Bad expression"));
         assert_eq!(line_color(r"A.uc(3) : Error, Bad"), Some("91"));
         assert_eq!(line_color(r"A.uc(3) : Warning, Unused"), Some("93"));
+        assert_eq!(line_color(r"A.uc(3) : ExecWarning, Odd"), Some("93"));
+        assert_eq!(line_color("A.uc:3: error: Bad"), Some("91"));
+        assert_eq!(line_color("A.uc:3: warning: Unused"), Some("93"));
         assert_eq!(line_color("Success - 0 error(s)"), None);
     }
 
