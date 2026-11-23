@@ -2849,6 +2849,9 @@ fn pkg_export_writes_native_data_and_t3d() {
             "Texture'MyPkg.UI.Button',MyPkg.Mix",
             "-o",
             "out",
+            // The textures' native data isn't a texture's.
+            "--native",
+            "bin",
         ],
     )
     .code(0)
@@ -2887,6 +2890,8 @@ fn pkg_export_writes_native_data_and_t3d() {
             "MyPkg.UI.Button",
             "--output",
             "out",
+            "--native",
+            "bin",
         ],
     )
     .code(0)
@@ -2898,7 +2903,7 @@ fn pkg_export_writes_native_data_and_t3d() {
 fn pkg_export_every_object() {
     let dir = obj_dir();
     // Not the group, UI. A class's .t3d is its defaults.
-    pkg_export(dir.path(), &["MyPkg.utx", "-o", "out"])
+    pkg_export(dir.path(), &["MyPkg.utx", "-o", "out", "--native", "bin"])
         .code(1)
         .stdout("Exported 5 objects to out\n")
         .stderr(
@@ -2974,6 +2979,8 @@ fn pkg_export_several_packages() {
             "Other.UI.Bar,MyPkg.Mix",
             "-o",
             "out",
+            "--native",
+            "bin",
         ],
     )
     .code(0)
@@ -4067,6 +4074,348 @@ fn pkg_export_sounds_as_wav() {
     );
 }
 
+/// `Textures.utx`: a palette (`Pal`), and textures: DXT1 (`Dxt`), P8 with
+/// the palette and masked (`Paletted`), RGBA8 with two mipmaps (`Mips`), and
+/// some that can't be written: P8 with no palette (`NoPalette`), or one in a
+/// package that isn't there (`Lost`), cut short (`Short`), whose palette
+/// isn't one (`Wrong`) or is cut short (`BadPal`, used by `UsesBadPal`);
+/// and G16 (`Gray`).
+fn texture_package() -> Vec<u8> {
+    let names = [
+        "None",
+        "Core",
+        "Package",
+        "Engine",
+        "Class",
+        "Texture",
+        "Palette",
+        "Other",
+        "Missing",
+        "Format",
+        "bMasked",
+        "Pal",
+        "Dxt",
+        "Paletted",
+        "Mips",
+        "NoPalette",
+        "Lost",
+        "Short",
+        "Wrong",
+        "BadPal",
+        "UsesBadPal",
+        "Gray",
+    ];
+    let n = |text: &str| names.iter().position(|&n| n == text).unwrap() as i32;
+    let imports = [
+        (n("Core"), n("Package"), 0, n("Engine")),
+        (n("Core"), n("Class"), -1, n("Texture")),
+        (n("Core"), n("Class"), -1, n("Palette")),
+        (n("Core"), n("Package"), 0, n("Other")),
+        (n("Engine"), n("Palette"), -4, n("Missing")),
+    ];
+    let format = |value: u8| vec![n("Format") as u8, 0x01, value];
+    let palette = |object: i32| {
+        let mut tag = vec![n("Palette") as u8, 0x05];
+        tag.extend(compact_index(object));
+        tag
+    };
+    // A texture's data, if it starts at `offset` in the file: its
+    // properties, `None`, then its mipmaps.
+    let texture = |offset: usize, properties: Vec<u8>, mips: &[(i32, i32, &[u8])]| {
+        let mut data = properties;
+        data.push(0);
+        data.extend(compact_index(mips.len() as i32));
+        for &(width, height, pixels) in mips {
+            let count = compact_index(pixels.len() as i32);
+            let end = offset + data.len() + 4 + count.len() + pixels.len();
+            data.extend((end as i32).to_le_bytes());
+            data.extend(count);
+            data.extend(pixels);
+            data.extend(width.to_le_bytes());
+            data.extend(height.to_le_bytes());
+            data.extend([0, 0]);
+        }
+        data
+    };
+    let exports = |o: &[usize]| {
+        let flags = 0x00070004;
+        let tex = -2;
+        let mut masked = palette(1);
+        // bMasked=True: the value is the tag's array bit, and its size 0.
+        masked.extend([n("bMasked") as u8, 0x80 | 0x50 | 3, 0]);
+        vec![
+            (
+                -3,
+                0,
+                n("Pal"),
+                flags,
+                vec![0, 2, 1, 2, 3, 255, 4, 5, 6, 255],
+            ),
+            (
+                tex,
+                0,
+                n("Dxt"),
+                flags,
+                texture(o[1], format(3), &[(4, 4, &DXT_BLOCK)]),
+            ),
+            (
+                tex,
+                0,
+                n("Paletted"),
+                flags,
+                texture(o[2], masked, &[(2, 1, &[0, 1])]),
+            ),
+            (
+                tex,
+                0,
+                n("Mips"),
+                flags,
+                texture(o[3], format(5), &[(2, 2, &[9; 16]), (1, 1, &[1, 2, 3, 4])]),
+            ),
+            (
+                tex,
+                0,
+                n("NoPalette"),
+                flags,
+                texture(o[4], Vec::new(), &[(1, 1, &[0])]),
+            ),
+            (
+                tex,
+                0,
+                n("Lost"),
+                flags,
+                texture(o[5], palette(-5), &[(1, 1, &[0])]),
+            ),
+            (
+                tex,
+                0,
+                n("Short"),
+                flags,
+                texture(o[6], format(5), &[(2, 2, &[0; 4])]),
+            ),
+            (
+                tex,
+                0,
+                n("Wrong"),
+                flags,
+                texture(o[7], palette(2), &[(1, 1, &[0])]),
+            ),
+            (-3, 0, n("BadPal"), flags, vec![0, 5]),
+            (
+                tex,
+                0,
+                n("UsesBadPal"),
+                flags,
+                texture(o[9], palette(9), &[(1, 1, &[0])]),
+            ),
+            (
+                tex,
+                0,
+                n("Gray"),
+                flags,
+                texture(o[10], format(10), &[(1, 1, &[0x34, 0x12])]),
+            ),
+        ]
+    };
+    // Where each export's data is, for the lazy arrays' SeekPos.
+    let placeholder =
+        usagi_pkg::Package::from_bytes(&package_file(&names, &imports, &exports(&[0; 11])))
+            .unwrap();
+    let offsets: Vec<usize> = placeholder
+        .exports()
+        .iter()
+        .map(|e| e.serial_offset.unwrap() as usize)
+        .collect();
+    package_file(&names, &imports, &exports(&offsets))
+}
+
+/// A DXT1 block: red and blue, every pixel red.
+const DXT_BLOCK: [u8; 8] = [0x00, 0xF8, 0x1F, 0x00, 0, 0, 0, 0];
+
+#[test]
+fn pkg_export_textures() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("Textures.utx"), texture_package()).unwrap();
+    let export = |args: &[&str]| {
+        usagi(dir.path())
+            .args(["pkg", "export", "Textures.utx"])
+            .args(args)
+            .assert()
+    };
+    let stderr = export(&["-o", "out", "--layout", "folder"])
+        .code(1)
+        .stdout("Exported 11 objects (4 in a file format) to out\n")
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8(stderr).unwrap();
+    for problem in [
+        "Texture'Textures.NoPalette': it has no palette",
+        "Texture'Textures.Lost': its palette, Palette'Other.Missing', can't be found",
+        "Texture'Textures.Short': mipmap 0 has 4 bytes, not the 16 that 2×2 TEXF_RGBA8 takes",
+        "Texture'Textures.Wrong': its palette, Texture'Textures.Dxt', isn't a palette",
+        "Texture'Textures.UsesBadPal': its palette, Palette'Textures.BadPal': invalid data",
+    ] {
+        assert!(
+            stderr.contains(&format!("usagi: Textures.utx: {}", problem)),
+            "{}",
+            stderr
+        );
+    }
+    assert_eq!(
+        stderr.matches("; written as .bin\n").count(),
+        5,
+        "{}",
+        stderr
+    );
+    // In folders: DXT as DDS, G16 as PNG, others as TGA.
+    let out = dir.path().join("out");
+    assert_eq!(
+        files_under(&out),
+        [
+            "Textures/Palette/BadPal.bin",
+            "Textures/Palette/Pal.bin",
+            "Textures/Texture/Dxt.dds",
+            "Textures/Texture/Gray.png",
+            "Textures/Texture/Lost.bin",
+            "Textures/Texture/Mips.tga",
+            "Textures/Texture/NoPalette.bin",
+            "Textures/Texture/Paletted.tga",
+            "Textures/Texture/Short.bin",
+            "Textures/Texture/UsesBadPal.bin",
+            "Textures/Texture/Wrong.bin",
+        ]
+    );
+    let textures = out.join("Textures").join("Texture");
+    // DXT, as DDS: its header, then the mipmap.
+    let dds = fs::read(textures.join("Dxt.dds")).unwrap();
+    assert_eq!((&dds[..4], dds.len()), (&b"DDS "[..], 128 + 8));
+    assert_eq!(&dds[84..88], b"DXT1");
+    assert_eq!(dds[128..], DXT_BLOCK);
+    // P8: the palette's colours, the first transparent since it's masked,
+    // in TGA's order (blue first).
+    let tga = |pixels: &[u8], width: u8, height: u8| {
+        let mut tga = vec![
+            0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, width, 0, height, 0, 32, 8,
+        ];
+        tga.extend(pixels);
+        tga.extend([0; 8]);
+        tga.extend(b"TRUEVISION-XFILE.\0");
+        tga
+    };
+    assert_eq!(
+        fs::read(textures.join("Paletted.tga")).unwrap(),
+        tga(&[0, 0, 0, 0, 6, 5, 4, 255], 2, 1)
+    );
+    // G16 keeps its 16 bits in PNG.
+    let decode = |path: std::path::PathBuf| {
+        let png = fs::read(path).unwrap();
+        let mut reader = png::Decoder::new(std::io::Cursor::new(png))
+            .read_info()
+            .unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        (info.color_type, info.bit_depth, pixels)
+    };
+    assert_eq!(
+        decode(textures.join("Gray.png")),
+        (
+            png::ColorType::Grayscale,
+            png::BitDepth::Sixteen,
+            vec![0x12, 0x34]
+        )
+    );
+
+    // Every mipmap; DDS keeps them in one file.
+    let objects = "Textures.Mips,Textures.Dxt";
+    let flat = ["--layout", "flat"];
+    export(&[&["--object", objects, "-o", "mips", "--mips"][..], &flat].concat())
+        .code(0)
+        .stdout("Exported 2 objects (2 in a file format) to mips\n");
+    let mips = dir.path().join("mips");
+    assert_eq!(
+        files_under(&mips),
+        [
+            "Texture'Textures.Dxt'.dds",
+            "Texture'Textures.Mips'.mip1.tga",
+            "Texture'Textures.Mips'.tga",
+        ]
+    );
+    assert_eq!(
+        fs::read(mips.join("Texture'Textures.Mips'.mip1.tga")).unwrap(),
+        tga(&[1, 2, 3, 4], 1, 1)
+    );
+    // TGA or PNG for DXT too.
+    export(
+        &[
+            &["--object", objects, "-o", "tga", "--native", "tga"][..],
+            &flat,
+        ]
+        .concat(),
+    )
+    .code(0);
+    assert_eq!(
+        files_under(&dir.path().join("tga")),
+        ["Texture'Textures.Dxt'.tga", "Texture'Textures.Mips'.tga"]
+    );
+    let png_objects = "Textures.Mips,Textures.Dxt,Textures.Paletted";
+    export(
+        &[
+            &[
+                "--object",
+                png_objects,
+                "-o",
+                "png",
+                "--native",
+                "png",
+                "--mips",
+            ][..],
+            &flat,
+        ]
+        .concat(),
+    )
+    .code(0);
+    let png = dir.path().join("png");
+    assert_eq!(
+        files_under(&png),
+        [
+            "Texture'Textures.Dxt'.png",
+            "Texture'Textures.Mips'.mip1.png",
+            "Texture'Textures.Mips'.png",
+            "Texture'Textures.Paletted'.png",
+        ]
+    );
+    assert_eq!(
+        decode(png.join("Texture'Textures.Paletted'.png")).2,
+        [0, 0, 0, 0, 4, 5, 6, 255]
+    );
+    // DDS for DXT only.
+    export(
+        &[
+            &["--object", objects, "-o", "dds", "--native", "dds"][..],
+            &flat,
+        ]
+        .concat(),
+    )
+    .code(0)
+    .stdout("Exported 2 objects (1 in a file format) to dds\n")
+    .stderr(
+        "usagi: Textures.utx: Texture'Textures.Mips': only DXT textures are written as DDS, \
+             and it's TEXF_RGBA8; written as .bin\n",
+    );
+
+    // Textures before version 84 aren't read.
+    let mut old = texture_package();
+    old[4] = 83;
+    fs::write(dir.path().join("Textures.utx"), old).unwrap();
+    export(&["--object", "Textures.Dxt", "-o", "old"])
+        .code(0)
+        .stderr(
+            "usagi: Textures.utx: Texture'Textures.Dxt': textures before version 84 aren't \
+             read; written as .bin\n",
+        );
+}
+
 #[test]
 fn pkg_export_properties_formats() {
     let dir = obj_dir();
@@ -4076,8 +4425,9 @@ fn pkg_export_properties_formats() {
             .args(args)
             .assert()
     };
-    // By default, native data only.
-    export(&["-o", "default"]).code(0);
+    // By default, native data only (which isn't a texture's: it's
+    // written as it is, with a note).
+    export(&["-o", "default"]).code(1);
     assert_eq!(
         files_under(&dir.path().join("default")),
         ["Texture'MyPkg.UI.Bar'.bin"]

@@ -738,13 +738,20 @@ takes a whole block. Rows run top to bottom.
 Every one of those 9,588 textures (objects of class `Texture` exactly, not
 its subclasses) read this way to the last byte of its data, with each
 mipmap's size matching its format and dimensions and its `UBits` and `VBits`
-matching its size.
+matching its size, except for mipmaps with no data at all: seven textures
+have some (four of them their largest), and one has no mipmaps. Killing
+Floor's and Red Orchestra's textures are the same, in `TEXF_P8`, `DXT1`,
+`DXT3`, `DXT5`, `RGBA8` and `G16`. No texture in the three games is
+`TEXF_RGB8` or `TEXF_L8`, and the engine never makes or converts one, so
+how `TEXF_RGB8`'s bytes are ordered isn't known.
 
 Things to allow for, from the engine and UModel (`Unreal/UnrealMaterial/
 UnTexture2.cpp`):
 
 - A mipmap's data can be empty; UModel uses the first mipmap that has data
-  (it cites `DemoPlayerSkins.utx`).
+  (it cites `DemoPlayerSkins.utx`). `usagi pkg export` writes the mipmaps
+  before the first after the largest that's empty, and nothing if the
+  largest is.
 - A procedural texture (`bParametric`, such as `FireTexture`) has its data
   emptied when it's saved: it's made at run time.
 - Before version 84, a texture with `bHasComp` has two arrays of mipmaps,
@@ -753,10 +760,22 @@ UnTexture2.cpp`):
   so their data is a texture's too. usagi reads only textures from version 84
   (`Package::texture`).
 
+The engine draws a `TEXF_P8` texture by its palette's colours as they are,
+alpha included, except that with `bMasked`, the first is transparent black
+(`FStaticTexture::GetTextureData` in `Engine/Src/UnTex.cpp`). Whether the
+alpha is used depends on the material (`bAlphaTexture`, for one): 575 of
+UT2004's 1,029 palettes have colours whose alpha isn't 255, and 21 textures
+that are neither masked nor `bAlphaTexture` use such colours, as some
+`TEXF_RGBA8` textures store alpha that's never used. `usagi pkg export`
+keeps the alpha as it's stored.
+
 UnrealEd exports DXT1, DXT3 and DXT5 textures as DDS (`UTextureExporterDDS`
 in `Editor/Src/UnEdFact.cpp`): a DDS header, then every mipmap's data as it
 is. It exports `TEXF_RGBA8` as TGA (`UTextureExporterTGA`), the rows of the
 first mipmap bottom to top, the bytes as they are, since TGA is BGRA too.
+`usagi pkg export` writes DDS the same way, and TGA too, but with the
+header's alpha bits set to 8, where UnrealEd's are 0, so that readers keep
+the alpha.
 
 ### Sounds (`Engine.Sound`)
 

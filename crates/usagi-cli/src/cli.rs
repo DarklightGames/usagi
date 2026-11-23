@@ -178,6 +178,11 @@ pub struct PkgExportArgs {
     #[arg(long)]
     pub raw: bool,
 
+    /// Write every mipmap of a texture written as TGA or PNG, the smaller
+    /// ones as `.mip1.tga`, `.mip2.tga`, ... (DDS always has every one).
+    #[arg(long)]
+    pub mips: bool,
+
     /// Also write each object's properties, in this format (default: T3D).
     #[arg(
         long,
@@ -192,9 +197,16 @@ pub struct PkgExportArgs {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PkgExportNative {
-    /// A file format where there's one: sounds as WAV. Other objects, as
-    /// `.bin`.
+    /// A file format where there's one: sounds as WAV, DXT textures as DDS
+    /// and other textures as TGA (16-bit greyscale ones, which TGA can't
+    /// hold, as PNG). Other objects, as `.bin`.
     Auto,
+    /// As `auto`, but textures as TGA.
+    Tga,
+    /// As `auto`, but textures as PNG.
+    Png,
+    /// As `auto`, but only DXT textures, as DDS; other textures as `.bin`.
+    Dds,
     /// Every object's native data as it is, as `.bin`.
     Bin,
     /// No native data.

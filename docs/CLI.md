@@ -774,6 +774,19 @@ data, and with `--properties`, its properties.
   | Class | Format |
   |---|---|
   | `Engine.Sound` (not its subclasses) | `.wav`: the sound's file, which the engine keeps whole. Only one that's a WAV file (a RIFF file of form `WAVE`) is written as `.wav`; every sound in UT2004's, Killing Floor's and Red Orchestra's packages is. |
+  | `Engine.Texture` (not its subclasses) | `.dds` for a `DXT1`, `DXT3` or `DXT5` texture, with every mipmap, as UnrealEd exports it; `.tga` for a `P8`, `RGBA8` or `L8` one, and `.png` for a `G16` one, its largest mipmap. `--native` chooses TGA, PNG or DDS instead (see below). |
+
+  A texture's pixels are written as they're stored, with the alpha
+  they have, even where the engine ignores it. A `P8` texture's are its
+  palette's colours, which are found in the game's packages if they're in
+  another package; with `bMasked`, its first colour is transparent black, as
+  the engine draws it. PNG keeps 16 bits of a `G16` texture; TGA can't, so
+  one is written as PNG by default, and as `.bin` with a note with
+  `--native tga`. Textures in other formats (`RGBA7`, `RGB16`,
+  `RGB8`, `RRRGGGBBB`, `NODATA`), with no mipmaps, or with no data in their
+  largest, are written as `.bin` with a note; mipmaps with no data after the
+  largest are left out, as some shipped textures have them. Textures from
+  before package version 84 aren't read.
 
 - With `--properties`, its properties, as
   [`pkg obj`](#usagi-pkg-obj-path-objects) prints them, in a format:
@@ -790,6 +803,8 @@ usagi pkg export MyTex.utx -o out                                # every object
 usagi pkg export MyTex.utx --object "Texture'MyTex.UI.*'" -o out
 usagi pkg export Textures/*.utx --class Texture -o out --layout folder
 usagi pkg export MySounds.uax --class Sound -o out                # .wav files
+usagi pkg export MyTex.utx --class Texture -o out                 # .dds and .tga files
+usagi pkg export MyTex.utx -o out --native png --mips             # every mipmap as .png
 usagi pkg export MySounds.uax -o out --native bin                 # .bin, as it's stored
 usagi pkg export MyTex.utx -o out --properties                    # native data and .t3d
 usagi pkg export MyTex.utx -o out --native none --properties=json # .json only
@@ -808,7 +823,8 @@ exported: they're only containers, and appear in the files' names or folders.
 | `--object OBJECT,...` | The objects, as for `pkg obj`: `Texture'MyTex.Walls.Brick'`, or `MyTex.Walls.Brick`, with `*`, `**` and `?`. Can be given more than once. |
 | `--class CLASS,...` | Only objects of these classes, as for `pkg obj`. |
 | `--layout flat\|folder` | Where each object's files go. Default: `flat`. |
-| `--native auto\|bin\|none` | What to write native data as. `auto`: in a file format where there's one, otherwise `.bin`. `bin`: always `.bin`. `none`: no native data. Default: `auto`. |
+| `--native auto\|png\|tga\|dds\|bin\|none` | What to write native data as. `auto`: in a file format where there's one, otherwise `.bin`. `tga`, `png`: as `auto`, but every texture in this format. `dds`: as `auto`, but only DXT textures, as DDS; any other texture is written as `.bin`, with a note. `bin`: always `.bin`. `none`: no native data. Default: `auto`. |
+| `--mips` | Write every mipmap of a texture written as PNG or TGA, each in its own file: the largest as `Brick.tga`, then `Brick.mip1.tga`, `Brick.mip2.tga`, .... DDS has every mipmap in one file anyway. |
 | `--raw` | Also write the native data as it is (`.bin`) for objects written in a file format. |
 | `--properties[=t3d\|json\|toml]` | Also write each object's properties, in this format. Default format: `t3d`. |
 
@@ -833,8 +849,9 @@ exits with code 2.
 If an object's native data can't be written in its format, it's written as
 `.bin` instead, and a note says why on standard error: a sound that isn't a
 WAV file (`it isn't a WAV file, and converting it isn't supported; written as
-.bin`), or native data that's malformed, which also makes the command exit
-with code 1. It ends with how many objects were exported, and how many of
+.bin`), a texture in a format usagi doesn't convert, or whose palette can't be
+found, or native data that's malformed (a texture's or its palette's too),
+which also makes the command exit with code 1. It ends with how many objects were exported, and how many of
 them in a file format: `Exported 282 objects (183 in a file format) to out`. An object whose properties are malformed
 isn't written: the problem is reported on standard error, the other objects
 are written, and the command exits with code 1. Properties are read by their

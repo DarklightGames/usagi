@@ -7,8 +7,10 @@ implemented yet**: the fallback, `usagi pkg export`, writes every object's
 tagged properties as T3D and its native data, unread, as `.bin` (see
 [CLI.md](CLI.md#usagi-pkg-export-paths---output-dir)); the first native
 data types (step 1, below) read textures and sounds, which `usagi pkg diff`
-compares; and sounds export as WAV, through all three layers: `Sound`, the
-`Audio` model and `WavWriter`, in `usagi-io`. The native data
+compares; sounds export as WAV, through all three layers: `Sound`, the
+`Audio` model and `WavWriter`, in `usagi-io`; and textures export as DDS,
+PNG and TGA, through `Texture` and `Palette`, the `Image` model, and
+`DdsWriter`, `PngWriter` and `TgaWriter`. The native data
 formats known so far are in
 [PACKAGE_FORMAT.md](PACKAGE_FORMAT.md#native-data).
 
@@ -71,7 +73,7 @@ type, and fixed up on writing.
 
 Done so far, by hand, in `usagi-pkg`: `LazyArray<u8>` (in `src/archive.rs`,
 which works out `SeekPos` from `Archive::file_offset` when writing),
-`Mipmap`, `Texture` and `Sound` (in `src/media.rs`). Textures before version
+`Mipmap`, `Texture`, `Palette` and `Sound` (in `src/media.rs`). Textures before version
 84 aren't read yet, and there's no registry by class yet.
 
 **We intend to generate these functions with a derive macro, in a
@@ -136,12 +138,20 @@ written as `.t3d` and `.bin`, as now.
 
 Done so far, with the flag named `--native` rather than `--format`, since
 `--properties[=t3d|json|toml]` chooses the properties' format: `--native
-auto` (the default) uses the one writer there is, WAV for sounds, `--native
-bin` turns writers off, and `--native none` writes no native data; `--raw`
-works as above. Properties aren't written unless asked for. A format's name
-will be added to `--native` with its writer. Which
-class has a writer is still a check in `pkg export` (`Engine.Sound` exactly),
-not yet the registry by class chain that step 1 describes.
+auto` (the default) uses the default writer for each kind (WAV for sounds,
+DDS for DXT textures and TGA for other textures, or PNG for 16-bit
+greyscale ones, which TGA can't hold), `--native tga`, `png` and `dds`
+choose textures' writer, `--native bin` turns writers off, and
+`--native none` writes no native data; `--raw` works as above, and
+`--mips` writes each mipmap of an image in a file of its own. Properties
+aren't written unless asked for. Which class has a writer is still a check
+in `pkg export` (`Engine.Sound` and `Engine.Texture` exactly), not yet the
+registry by class chain that step 1 describes.
+
+A texture's `Format`, `Palette` and `bMasked` are taken as 0 (`TEXF_P8`,
+`None`, `False`) when they aren't stored, since `Engine.Texture` and its
+superclasses don't give them defaults: class defaults aren't combined yet
+(see layer 0).
 
 ## Open questions
 
