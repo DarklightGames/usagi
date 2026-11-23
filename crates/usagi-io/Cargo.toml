@@ -14,4 +14,4 @@ repository.workspace = true
 name = "usagi_io"
 
 [dependencies]
-usagi-pkg = { path = "../usagi-pkg", version = "0.4.0" }
+usagi-pkg = { path = "../usagi-pkg", version = "0.4.1" }
