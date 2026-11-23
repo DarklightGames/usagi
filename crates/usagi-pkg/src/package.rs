@@ -1,5 +1,9 @@
 use std::fmt;
+use std::fs::File;
 use std::path::Path;
+use std::sync::Arc;
+
+use memmap2::Mmap;
 
 use crate::tables::{self, Tables};
 use crate::{Export, Import, NameEntry, ObjectRef, Result, Summary, uz2};
@@ -26,13 +30,34 @@ pub struct Package {
     bytes: Bytes,
 }
 
-/// The bytes of the whole file. Printed by `Debug` as their length only.
-#[derive(Clone, PartialEq, Eq)]
-struct Bytes(Vec<u8>);
+/// The bytes of the whole file: in memory, or the file mapped into it.
+/// Printed by `Debug` as their length only.
+#[derive(Clone)]
+enum Bytes {
+    Owned(Vec<u8>),
+    Mapped(Arc<Mmap>),
+}
+
+impl Bytes {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Bytes::Owned(bytes) => bytes,
+            Bytes::Mapped(map) => map,
+        }
+    }
+}
+
+impl PartialEq for Bytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for Bytes {}
 
 impl fmt::Debug for Bytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<{} bytes>", self.0.len())
+        write!(f, "<{} bytes>", self.as_slice().len())
     }
 }
 
@@ -44,42 +69,84 @@ pub fn package_name(path: &Path) -> String {
 }
 
 impl Package {
-    /// Reads a package file. A file whose extension is `.uz2` (in any case)
-    /// is decompressed first: like the engine, it's the extension that says
-    /// whether a file is compressed.
+    /// Reads a package file into memory. A file whose extension is `.uz2`
+    /// (in any case) is decompressed first: like the engine, it's the
+    /// extension that says whether a file is compressed.
+    ///
+    /// The package keeps its own copy of the file, so the file can be
+    /// changed, replaced or deleted afterwards, by this program or another.
+    /// For reading many large packages quickly, see [`Package::map`].
     pub fn read(path: &Path) -> Result<Package> {
-        let bytes = std::fs::read(path)?;
         let package = if crate::edit::is_uz2(path) {
-            Package::from_uz2_bytes(&bytes)?
+            Package::from_uz2_bytes(&std::fs::read(path)?)?
         } else {
-            Package::from_bytes(&bytes)?
+            Package::parse(Bytes::Owned(std::fs::read(path)?))?
         };
-        Ok(Package {
+        Ok(Package::named(package, path))
+    }
+
+    /// Reads a package file by mapping it into memory, rather than copying
+    /// it: only the parts that are used are loaded, from the system's file
+    /// cache, so many large packages can be open at once. A `.uz2` file is
+    /// decompressed into memory, as [`Package::read`] does.
+    ///
+    /// Use it for short, read-only work on files nothing else is writing,
+    /// such as exporting. The mapping lasts as long as the package or any
+    /// clone of it, and while it does, on Windows the file can't be
+    /// replaced, truncated or (usually) deleted, by this program or another.
+    ///
+    /// # Safety
+    ///
+    /// The file must not be changed while the mapping lasts, by this
+    /// program or another. On Linux, nothing stops that: the package's data
+    /// would change under it (which Rust's guarantees don't allow), and if
+    /// the file is truncated, reading the part that's gone kills the
+    /// program (`SIGBUS`). An I/O error while reading the mapped file (a
+    /// network drive that goes away) is a crash too, not an error.
+    pub unsafe fn map(path: &Path) -> Result<Package> {
+        if crate::edit::is_uz2(path) {
+            return Package::read(path);
+        }
+        // SAFETY: passed on to the caller. (An empty file maps to an empty
+        // slice.)
+        let map = File::open(path).and_then(|file| unsafe { Mmap::map(&file) })?;
+        let package = Package::parse(Bytes::Mapped(Arc::new(map)))?;
+        Ok(Package::named(package, path))
+    }
+
+    /// The package with its name taken from its file's.
+    fn named(package: Package, path: &Path) -> Package {
+        Package {
             name: package_name(path),
             ..package
-        })
+        }
     }
 
     /// Reads a package from the bytes of the whole file.
     pub fn from_bytes(bytes: &[u8]) -> Result<Package> {
-        let summary = Summary::read(bytes)?;
-        let tables = tables::read(bytes, &summary)?;
-        Ok(Package {
-            name: String::new(),
-            summary,
-            size: bytes.len(),
-            compressed_size: None,
-            tables,
-            bytes: Bytes(bytes.to_vec()),
-        })
+        Package::parse(Bytes::Owned(bytes.to_vec()))
     }
 
     /// Reads a package from the bytes of a whole `.uz2` file.
     pub fn from_uz2_bytes(bytes: &[u8]) -> Result<Package> {
-        let package = Package::from_bytes(&uz2::decompress(bytes)?)?;
+        let package = Package::parse(Bytes::Owned(uz2::decompress(bytes)?))?;
         Ok(Package {
             compressed_size: Some(bytes.len()),
             ..package
+        })
+    }
+
+    fn parse(bytes: Bytes) -> Result<Package> {
+        let data = bytes.as_slice();
+        let summary = Summary::read(data)?;
+        let tables = tables::read(data, &summary)?;
+        Ok(Package {
+            name: String::new(),
+            summary,
+            size: data.len(),
+            compressed_size: None,
+            tables,
+            bytes,
         })
     }
 
@@ -109,7 +176,9 @@ impl Package {
     pub fn export_data(&self, export: usize) -> &[u8] {
         let export = &self.tables.exports[export];
         match export.serial_offset {
-            Some(offset) => &self.bytes.0[offset as usize..][..export.serial_size as usize],
+            Some(offset) => {
+                &self.bytes.as_slice()[offset as usize..][..export.serial_size as usize]
+            }
             None => &[],
         }
     }

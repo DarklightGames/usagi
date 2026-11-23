@@ -349,9 +349,42 @@ fn reads_package_files() {
     assert_eq!(package.size, bytes.len());
     assert_eq!(package.compressed_size, None);
     assert_eq!(package.summary, Summary::read(&bytes).unwrap());
+    // Mapped, it's the same package, and so is a clone of it.
+    // SAFETY: nothing changes the file while it's mapped.
+    let mapped = unsafe { Package::map(&path) }.unwrap();
+    assert_eq!(mapped, package);
+    assert_eq!(mapped.clone(), mapped);
+    let mut other = package.clone();
+    other.name = "Other".to_string();
+    assert_ne!(mapped, other);
+    // A .uz2 file is decompressed into memory either way.
+    let uz2 = dir.path().join("Test.u.uz2");
+    std::fs::write(&uz2, usagi_pkg::uz2::compress(&bytes)).unwrap();
+    let compressed = unsafe { Package::map(&uz2) }.unwrap();
+    assert_eq!(
+        compressed.compressed_size,
+        Package::read(&uz2).unwrap().compressed_size
+    );
+    assert_eq!(compressed.summary, package.summary);
+    // An empty file maps to nothing, which isn't a package.
+    let empty = dir.path().join("Empty.u");
+    std::fs::write(&empty, b"").unwrap();
+    for error in [
+        Package::read(&empty).unwrap_err(),
+        unsafe { Package::map(&empty) }.unwrap_err(),
+    ] {
+        assert!(!matches!(error, Error::Io(_)), "{:?}", error);
+    }
 
+    for missing in ["Missing.u.uz2", "Missing.u"] {
+        let missing = dir.path().join(missing);
+        assert!(matches!(Package::read(&missing), Err(Error::Io(_))));
+        assert!(matches!(
+            unsafe { Package::map(&missing) },
+            Err(Error::Io(_))
+        ));
+    }
     let error = Package::read(&dir.path().join("Missing.u")).unwrap_err();
-    assert!(matches!(error, Error::Io(_)));
     assert!(std::error::Error::source(&error).is_some());
     assert!(!error.to_string().is_empty());
     let error = Package::from_bytes(b"nope").unwrap_err();
