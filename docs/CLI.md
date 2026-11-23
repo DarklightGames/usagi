@@ -1130,7 +1130,9 @@ Besides lint codes, a problem's code can be `parse` (a recovered problem),
 ## Configuration
 
 `usagi` reads the first `usagi.toml` or `.usagi.toml` it finds in the current
-directory or one of its parents. Every setting is optional.
+directory or one of its parents, skipping a mod's own file (see
+[Mod configuration](#mod-configuration)) when the game directory has one.
+Every setting is optional.
 
 ```toml
 # Only check files matching these globs. Default: every .uc file.
@@ -1191,8 +1193,10 @@ An unknown key, an invalid glob or an unknown lint selector is an error
 Each mod can have its own configuration file, `<root>/<Mod>/usagi.toml` (or
 `.usagi.toml`). It's used together with the configuration found as usual (the
 game directory's): by `usagi build` for the mod being built, and by every
-other command for the mod named in `build.mod`. It takes every setting except
-`build.mod`, `build.root` and `build.ini`:
+other command for the mod named in `build.mod`. So when `usagi` runs inside a
+mod's folder (one with a `System/Default.ini`, in a folder with a
+`System/UCC.exe`), it finds the game directory's file, not the mod's. A mod's
+file takes every setting except `build.mod`, `build.root` and `build.ini`:
 
 ```toml
 include = ["MyMod_*"]

@@ -7,6 +7,8 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 use usagi_core::LintSelection;
 
+use crate::build::find_ci;
+
 /// The names a configuration file may have, in order of preference.
 pub const FILE_NAMES: [&str; 2] = ["usagi.toml", ".usagi.toml"];
 
@@ -234,14 +236,30 @@ pub struct LoadedConfig {
 }
 
 /// Finds the configuration file for `start`: the first `usagi.toml` or
-/// `.usagi.toml` in `start` or one of its ancestors.
+/// `.usagi.toml` in `start` or one of its ancestors. A mod's own file is
+/// skipped for the game directory's, if it has one, since the mod's is only
+/// ever used together with it.
 pub fn find(start: &Path) -> Option<PathBuf> {
-    start.ancestors().find_map(|dir| {
+    let path = start.ancestors().find_map(|dir| {
         FILE_NAMES
             .iter()
             .map(|name| dir.join(name))
             .find(|path| path.is_file())
-    })
+    })?;
+    let dir = path.parent()?;
+    match dir.parent() {
+        Some(game_dir) if is_mod_dir(dir, game_dir) => find(game_dir).or(Some(path)),
+        _ => Some(path),
+    }
+}
+
+/// Whether `dir` is a mod's folder: it has a `System/Default.ini`, and it's
+/// in `game_dir`, a game directory (one with a `System/UCC.exe`).
+fn is_mod_dir(dir: &Path, game_dir: &Path) -> bool {
+    let in_system = |dir: &Path, name: &str| {
+        find_ci(dir, "System").is_some_and(|system| find_ci(&system, name).is_some())
+    };
+    in_system(dir, "Default.ini") && in_system(game_dir, "UCC.exe")
 }
 
 /// Loads the configuration: `explicit` if given, else the file found from

@@ -807,6 +807,42 @@ fn build_writes_the_version_class() {
     assert_eq!(made(root), "");
 }
 
+#[cfg(unix)]
+#[test]
+fn build_from_inside_the_mod_finds_the_game_config() {
+    let dir = game();
+    let root = dir.path();
+    // The mod's own file is closer, but the game directory's is the one found.
+    fs::write(
+        root.join("Mod/usagi.toml"),
+        "[build]\nversion = \"1.2.3\"\nversion-class = \"A/Classes/AVersion.uc\"\n",
+    )
+    .unwrap();
+    let (code, out) = build(&root.join("Mod/System"), &[]);
+    assert_eq!(code, 0, "{}", out);
+    assert_eq!(made(root), "A\nB\nC\n");
+    assert!(root.join("A/Classes/AVersion.uc").is_file());
+}
+
+#[test]
+fn a_mods_file_is_skipped_for_the_game_directorys() {
+    let dir = project(&[
+        ("System/UCC.exe", ""),
+        ("Mod/System/Default.ini", ""),
+        ("Mod/usagi.toml", "[lint]\nignore = [\"S003\"]\n"),
+        ("Mod/Classes/Foo.uc", SELF_ASSIGNMENT),
+    ]);
+    let mod_dir = dir.path().join("Mod");
+    // Without a game directory's file, the mod's is used.
+    assert!(!concise(&mod_dir, &[]).contains("S003"));
+    // With one, it's found instead.
+    fs::write(dir.path().join("usagi.toml"), "").unwrap();
+    assert!(concise(&mod_dir, &[]).contains("S003"));
+    // A folder with a Default.ini that isn't in a game directory isn't a mod.
+    fs::remove_file(dir.path().join("System/UCC.exe")).unwrap();
+    assert!(!concise(&mod_dir, &[]).contains("S003"));
+}
+
 #[test]
 fn build_setup_errors() {
     let dir = project(&[("System/UCC.exe", "")]);
