@@ -223,10 +223,13 @@ fn repo_path(path: &str) -> Result<String, String> {
     let top = PathBuf::from(lines.next().unwrap_or_default());
     let prefix = lines.next().unwrap_or_default().to_string();
     let outside = || format!("{} is outside the repository at {}", path, top.display());
-    let relative = if Path::new(path).is_absolute() {
+    // A path from the root, such as `/Elsewhere.u`: on Windows, that's not
+    // absolute (it has no drive), but it isn't relative to the current
+    // directory either: it's on the current drive.
+    let relative = if Path::new(path).has_root() {
         // Through symbolic links, as git gives the top.
         let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        let file = Path::new(path);
+        let file = &std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path));
         let resolved = match (file.parent(), file.file_name()) {
             (Some(dir), Some(name)) => canonical(dir).join(name),
             _ => file.to_path_buf(),
