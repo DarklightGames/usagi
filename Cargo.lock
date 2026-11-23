@@ -977,7 +977,7 @@ checksum = "81e544489bf3d8ef66c953931f56617f423cd4b5494be343d9b9d3dda037b9a3"
 
 [[package]]
 name = "usagi-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "annotate-snippets",
  "assert_cmd",
@@ -1004,7 +1004,7 @@ dependencies = [
 
 [[package]]
 name = "usagi-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "convert_case",
  "pest",
@@ -1018,14 +1018,14 @@ dependencies = [
 
 [[package]]
 name = "usagi-io"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "usagi-pkg",
 ]
 
 [[package]]
 name = "usagi-pkg"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "flate2",
  "serde",
