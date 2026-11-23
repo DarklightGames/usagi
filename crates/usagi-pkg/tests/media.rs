@@ -3,7 +3,8 @@ mod common;
 use common::{ExportBytes, PackageBytes, SummaryBytes, index, name};
 use usagi_pkg::archive::{Archive, FString, LazyArray, Loader, NameRef, Saver, Serialize};
 use usagi_pkg::{
-    Mipmap, ObjectRef, Package, SOUND_GROUP_SOUNDS_LICENSEE_VERSION, Sound, SoundGroup, Texture,
+    Color, Mipmap, ObjectRef, PALETTE_ALPHA_VERSION, Package, Palette,
+    SOUND_GROUP_SOUNDS_LICENSEE_VERSION, Sound, SoundGroup, Texture, TextureFormat,
 };
 
 /// A package at `version` and `licensee` whose names are `None` and `WAV`,
@@ -175,6 +176,70 @@ fn a_texture_is_read_where_its_data_is_in_the_file() {
         old.texture(0, 1).unwrap_err().to_string(),
         "invalid data at offset 1: textures before version 84 aren't read"
     );
+}
+
+#[test]
+fn texture_formats_are_the_engines() {
+    let names: Vec<String> = (0..=12)
+        .map(|value| TextureFormat::from_byte(value).name())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "TEXF_P8",
+            "TEXF_RGBA7",
+            "TEXF_RGB16",
+            "TEXF_DXT1",
+            "TEXF_RGB8",
+            "TEXF_RGBA8",
+            "TEXF_NODATA",
+            "TEXF_DXT3",
+            "TEXF_DXT5",
+            "TEXF_L8",
+            "TEXF_G16",
+            "TEXF_RRRGGGBBB",
+            "format 12",
+        ]
+    );
+    assert_eq!(TextureFormat::from_byte(255), TextureFormat::Unknown(255));
+    let dxt: Vec<u8> = (0..=12)
+        .filter(|&value| TextureFormat::from_byte(value).is_dxt())
+        .collect();
+    assert_eq!(dxt, [3, 7, 8]);
+}
+
+#[test]
+fn palettes_are_their_colours_red_first() {
+    let package = package(128, 29);
+    let palette = Palette {
+        colors: vec![
+            Color {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 4,
+            },
+            Color {
+                r: 5,
+                g: 6,
+                b: 7,
+                a: 0,
+            },
+        ],
+    };
+    let bytes = saved(&package, palette.clone(), 0);
+    assert_eq!(bytes, [2, 1, 2, 3, 4, 5, 6, 7, 0]);
+    assert_eq!(loaded::<Palette>(&package, &bytes, 0), palette);
+    // Before version 66, the engine makes every colour opaque, but writes
+    // the alpha it has.
+    let old = package_at(u32::from(PALETTE_ALPHA_VERSION) - 1, 0, &[]);
+    assert_eq!(saved(&old, palette.clone(), 0), bytes);
+    let read: Palette = loaded(&old, &bytes, 0);
+    assert_eq!(
+        read.colors.iter().map(|c| c.a).collect::<Vec<_>>(),
+        [255, 255]
+    );
+    assert_eq!(read.colors[1].b, 7);
 }
 
 #[test]

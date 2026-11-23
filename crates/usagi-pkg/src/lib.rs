@@ -47,7 +47,8 @@ pub use edit::set_package_flags;
 pub use error::{Error, Result};
 pub use flags::{ObjectFlags, PackageFlags};
 pub use media::{
-    Mipmap, SOUND_GROUP_SOUNDS_LICENSEE_VERSION, Sound, SoundGroup, TEXTURE_MIPS_VERSION, Texture,
+    Color, Mipmap, PALETTE_ALPHA_VERSION, Palette, SOUND_GROUP_SOUNDS_LICENSEE_VERSION, Sound,
+    SoundGroup, TEXTURE_MIPS_VERSION, Texture, TextureFormat,
 };
 pub use package::{Package, package_name};
 pub use packages::{Decl, Lookup, Packages, Scope, SearchPath, Type};

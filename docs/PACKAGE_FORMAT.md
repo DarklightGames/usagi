@@ -23,7 +23,7 @@ the [tagged properties](#tagged-properties) at its start and, for some
 classes, the [native data](#native-data) after them: classes, states,
 functions and structs (with their [bytecode](#bytecode)), property
 declarations, enums, constants and text buffers, which usagi reads and writes
-back; and textures and palettes, which it doesn't read yet.
+back; and textures, palettes and sounds, which it reads (`src/media.rs`).
 
 The references are to the engine source (`Core/...`) and were checked by
 reading all 847 packages of a UT2004 install, versions 68 to 128, with a
