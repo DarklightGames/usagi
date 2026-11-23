@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::class::PropertyKind;
+use crate::native::NativeLookup;
 use crate::{ObjectRef, Package, Result};
 
 /// `RF_Public`: other packages can import the object.
@@ -166,6 +167,8 @@ pub struct Packages {
     loaded: RefCell<HashMap<String, Option<Rc<Package>>>>,
     structs: RefCell<HashMap<(String, usize), Rc<StructInfo>>>,
     resolved: RefCell<HashMap<(String, usize), Option<Scope>>>,
+    /// Classes' native classes, by the class's lowercase path.
+    pub(crate) natives: RefCell<HashMap<String, NativeLookup>>,
 }
 
 impl Packages {

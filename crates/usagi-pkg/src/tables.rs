@@ -93,6 +93,8 @@ pub struct Export {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tables {
     pub names: Vec<NameEntry>,
+    /// Each name's string as it's stored, to write it back the same.
+    pub raw_names: Vec<Vec<u8>>,
     pub imports: Vec<Import>,
     pub exports: Vec<Export>,
 }
@@ -104,12 +106,15 @@ pub fn read(bytes: &[u8], summary: &Summary) -> Result<Tables> {
 
     r.seek(summary.name_offset as usize);
     let mut names = Vec::new();
+    let mut raw_names = Vec::new();
     for _ in 0..summary.name_count {
+        let start = r.pos();
         let name = if summary.version() >= STRING_NAMES_VERSION {
             r.string("name table")?
         } else {
             r.c_string("name table")?
         };
+        raw_names.push(bytes[start..r.pos()].to_vec());
         names.push(NameEntry {
             name: name.chars().take(MAX_NAME_LEN).collect(),
             flags: r.u32("name table")?,
@@ -190,6 +195,7 @@ pub fn read(bytes: &[u8], summary: &Summary) -> Result<Tables> {
 
     let tables = Tables {
         names,
+        raw_names,
         imports,
         exports,
     };

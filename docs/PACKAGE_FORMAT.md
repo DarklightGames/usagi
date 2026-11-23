@@ -11,19 +11,31 @@ also at version 128 and licensee version 29, but a different
 [tag](#summary-fpackagefilesummary). This was checked on 4,122 packages from
 those games' installs and the Darkest Hour source tree.
 
-The [`usagi-pkg`](../crates/usagi-pkg) crate reads this format (so far, the
+The [`usagi-pkg`](../crates/usagi-pkg) crate reads this format (the
 summary, the name, import and export tables, objects' tagged properties,
-classes and the other native data marked below, and `.uz2` files), and finds
-the packages a package refers to. `usagi pkg list` prints a package's
-summary, imports and exports, and `usagi pkg obj` objects' properties.
+every class's native data described below, and `.uz2` files), finds the
+packages a package refers to, and [writes packages](#writing-a-package).
+`usagi pkg list` prints a package's summary, imports and exports, `usagi pkg
+obj` objects' properties, and `usagi pkg classes` counts objects by class and
+checks that everything writes back the same.
 
 It covers the *container*: the summary, the name, import and export tables, and
 how they reference each other. Of what's inside an export's data, it covers
-the [tagged properties](#tagged-properties) at its start and, for some
-classes, the [native data](#native-data) after them: classes, states,
-functions and structs (with their [bytecode](#bytecode)), property
-declarations, enums, constants and text buffers, which usagi reads and writes
-back; and textures and palettes, which it doesn't read yet.
+the [tagged properties](#tagged-properties) at its start and the [native
+data](#native-data) after them, for every class that has any in UT2004's and
+Red Orchestra's packages: classes, states, functions and structs (with their
+[bytecode](#bytecode)), property declarations, enums, constants and text
+buffers; textures, palettes, fonts and sounds; static meshes, skeletal and
+vertex meshes, animations and Karma collision; and levels' BSP models,
+brushes, terrain and lighting.
+
+usagi reads every object's native data in the 1,691 packages of a Red
+Orchestra install with Darkest Hour's development tree, and in the 840 of a
+UT2004 install, and writes it back byte for byte, both where it was and
+moved elsewhere in the file; and writes every one of those packages back
+byte for byte (`usagi pkg classes --round-trip`). The only objects not read
+are 24 in each install whose classes (`UnrealEd`'s editor options) aren't in
+the game's `UnrealEd.u`, so the engine couldn't load them either.
 
 The references are to the engine source (`Core/...`) and were checked by
 reading all 847 packages of a UT2004 install, versions 68 to 128, with a
@@ -42,8 +54,26 @@ throwaway reader. Every one of them matched the layout below.
 | `Core/Inc/UnStack.h` | The bytecode's tokens (`EExprToken`). |
 | `Core/Src/UnProp.cpp` | Each property type's `Serialize` (its declaration), `SerializeItem` (its value) and `ExportTextItem` (its T3D text). |
 | `Core/Src/UnMisc.cpp` | `appFindPackageFile`: finding a package's file by its name. |
-| `Engine/Inc/UnTex.h`, `Engine/Src/UnTex.cpp` | `UTexture`, `FMipmap` and `UPalette`: textures' native data. |
+| `Engine/Inc/UnTex.h`, `Engine/Src/UnTex.cpp` | `UTexture`, `FMipmap`, `UPalette` and `UFont`: textures', palettes' and fonts' native data. |
+| `Engine/Src/UnFont.cpp` | `UFont::Serialize`, and its old format. |
 | `Engine/Inc/UnRenderResource.h` | `ETextureFormat` and `FColor`. |
+| `Engine/Inc/UnAudio.h`, `Engine/Src/UnAudio.cpp` | `USound`, `USoundGroup` and `UProceduralSound`. |
+| `Engine/Inc/UnPrim.h`, `Engine/Src/UnPrim.cpp` | `UPrimitive`: bounds. |
+| `Engine/Inc/UnStaticMesh.h`, `Engine/Src/UnStaticMesh.cpp`, `Engine/Inc/UnkDOP.h` | `UStaticMesh`, `UStaticMeshInstance` and their structures. |
+| `Engine/Inc/UnRenderUtil.h`, `Engine/Src/UnRenderUtil.cpp` | `FRawIndexBuffer` and `FRawColorStream`. |
+| `Engine/Inc/KTypes.h` | `UKMeshProps` and Karma's collision shapes. |
+| `Engine/Inc/UnConvexVolume.h` | `UConvexVolume`. |
+| `Engine/Inc/UnLodMesh.h`, `Engine/Src/UnLodMesh.cpp`, `Engine/Src/UnMesh.cpp` | `UMesh`, `ULodMesh` and their structures; `FMeshAnimSeq`. |
+| `Engine/Inc/UnSkeletalMesh.h`, `Engine/Src/UnSkeletalMesh.cpp` | `USkeletalMesh`, `UMeshAnimation` and their structures. |
+| `Engine/Inc/UnVertMesh.h`, `Engine/Src/UnVertMesh.cpp` | `UVertMesh`. |
+| `Engine/Inc/UnModel.h`, `Engine/Inc/UnObj.h`, `Engine/Src/UnModel.cpp` | `UModel`, `UPolys` and their structures. |
+| `Engine/Inc/UnLevel.h`, `Engine/Src/UnLevel.cpp`, `Engine/Src/UnURL.cpp` | `ULevelBase`, `ULevel` and `FURL`. |
+| `Engine/Inc/UnTerrain.h`, `Engine/Src/UnTerrain.cpp` | `ATerrainInfo`, `UTerrainSector` and `UTerrainPrimitive`. |
+| `Engine/Src/UnActor.cpp` | `AActor::Serialize`, which stores nothing of its own. |
+| `Core/Inc/UnMath.h` | `FVector`, `FPlane`, `FSphere`, `FBox`, `FCoords`, `FQuat`, `FMatrix` and `FRotator`. |
+| `Core/Inc/UnTemplate.h` | `TArray`, `TLazyArray` and `TMap`. |
+| `Fire/Inc/UnFractal.h`, `Fire/Src/UnFractal.cpp` | `UFireTexture`. |
+| `Editor/Src/UnPrefab.cpp` | `UPrefab`. |
 
 ## Primitive types
 
@@ -397,10 +427,22 @@ It also means that the same texture or sound has different bytes in two
 packages if its data is at different offsets, which is why `pkg diff` reads
 them rather than comparing their bytes.
 
+A lazy array can hold any type, not only bytes: a static mesh's raw
+triangles are a `TLazyArray<FStaticMeshTriangle>`. It's stored the same way:
+`SeekPos`, then a `TArray` of the items. These classes have lazy arrays, and
+are the only ones whose native data has to be written again when it moves:
+textures (and fire textures), sounds, static meshes (`RawTriangles`), BSP
+models (lightmap textures' texels, `FStaticLightMapTexture::Data[2]`) and
+skeletal meshes (each LOD model's `Influences`, `Wedges`, `Faces` and
+`Points`, and the mesh's raw `RawVerts`, `RawWedges`, `RawFaces`,
+`RawInfluences`, `RawCollapseWedges` and `RawFaceLevel`; `RawNormals` isn't
+stored).
+
 usagi (`LazyArray` in `src/archive.rs`) skips to `SeekPos` when it's after
 the end of the array, as the engine does, and rejects one before it, which
 would mean reading the array's own bytes again as what follows it. When
-writing, it works out `SeekPos` from where the data will be in the file.
+writing, it works out `SeekPos` from where the data will be in the file: it
+writes the items aside first to know their size.
 
 ## Tagged properties
 
@@ -782,6 +824,317 @@ count (256 in every palette in UT2004's textures), then 4 bytes each, in the
 order **R, G, B, A** (`FColor`'s `operator<<`). Before version 66, the alpha
 isn't stored right: the engine sets it to 255 when loading.
 
+### Fonts (`Engine.Font`)
+
+`UFont::Serialize` writes, after the tagged properties:
+
+| Field | Type | Notes |
+|---|---|---|
+| `Characters` | array of `FFontCharacter` | From licensee version 29 (`0x1D`). Each `StartU`, `StartV`, `USize`, `VSize` (`i32`s) and `TextureIndex` (`u8`). |
+| `Textures` | array of objects | From licensee version 29. The textures the characters are in. |
+| `Pages`, `CharactersPerPage` | array of `FOLDFontPage`, `i32` | Before licensee version 29, in place of the two above. A page is a texture (object) and its characters (an array of `StartU`, `StartV`, `USize` and `VSize`, `i32`s). |
+| `Kerning` | `i32` | |
+| `CharRemap` | `TMap<TCHAR,TCHAR>` | From version 69: an array of pairs, each two `u16`s (a `TCHAR` is a UTF-16 code unit): a character and the one it's drawn as. |
+| `IsRemapped` | `i32` | From version 69. |
+
+A `TMap` is stored as an array of its pairs, key then value (`TMapBase`'s
+`operator<<`).
+
+### Procedural sounds (`Engine.ProceduralSound`)
+
+Like a sound group, `UProceduralSound::Serialize` skips `USound`'s data: after
+the tagged properties come `Likelihood` (`f32`, `USound`'s), `BaseSound` (an
+object), `PitchModification`, `VolumeModification`, `PitchVariance` and
+`VolumeVariance` (`f32`s).
+
+### Fire textures (`Fire.FireTexture`)
+
+`UFireTexture::Serialize` writes a texture's mipmaps, then `Sparks`, an array
+of `FSpark` (`Fire/Inc/UnFractal.h`): 8 bytes each, `Type`, `Heat`, `X`, `Y`
+and four bytes whose meaning depends on the type. A procedural texture's
+mipmaps are emptied when it's saved. The other `Fire` textures
+(`WaterTexture`, `WaveTexture`, ...) have a texture's data alone.
+
+### Prefabs (`Editor.Prefab`)
+
+`UPrefab::Serialize` writes `FileType` (a name) and `T3DText` (an `FString`):
+the actors, as T3D.
+
+### Which native data an object has
+
+An object's native data is written by the C++ `Serialize` of the nearest of
+its class and superclasses that overrides it (`Super::Serialize` writing the
+parent's part first). A script class adds none: an object of
+`DH_Engine.DHObstacle` has `Engine.Actor`'s native data, which is none
+(`AActor::Serialize` stores nothing when loading or saving). So to know an
+object's native data, follow its class's superclasses (each class's
+`SuperField`, through the packages they're in) to the first that's in this
+table. usagi does this (`Packages::native_class`), and stops at the class's
+path when it's in the table, so `Engine.Texture` doesn't need `Engine.u`.
+
+| Class | Native data |
+|---|---|
+| `Core.Object`, `Core.Package`, `Engine.Actor`, `Engine.Material` | None: only tagged properties. `UMaterial::Serialize`, `UMaterialSequence::Serialize` and `UPackage::Serialize` add nothing. |
+| `Core.Class`, `Core.State`, `Core.Function`, `Core.Struct`, `Core.*Property`, `Core.Enum`, `Core.Const`, `Core.TextBuffer` | [Classes, states, functions and structs](#classes-states-functions-and-structs), [property declarations](#property-declarations), [enums, constants and text buffers](#enums-constants-and-text-buffers). |
+| `Engine.Texture`, `Fire.FireTexture` | [Textures](#textures-enginetexture), [fire textures](#fire-textures-firefiretexture). |
+| `Engine.Palette`, `Engine.Font` | [Palettes](#palettes-enginepalette), [fonts](#fonts-enginefont). |
+| `Engine.Sound`, `Engine.SoundGroup`, `Engine.ProceduralSound` | [Sounds](#sounds-enginesound), [procedural sounds](#procedural-sounds-engineproceduralsound). |
+| `Engine.Primitive`, `Engine.Mesh`, `Engine.FluidSurfacePrimitive` | [A primitive's bounds](#primitives-engineprimitive). `UMesh` and `UFluidSurfacePrimitive` add nothing. |
+| `Engine.StaticMesh`, `Engine.StaticMeshInstance` | [Static meshes](#static-meshes-enginestaticmesh), [their actors' lighting](#static-mesh-instances-enginestaticmeshinstance). |
+| `Engine.KMeshProps`, `Engine.ConvexVolume` | [Karma collision](#karma-collision-enginekmeshprops), [convex volumes](#convex-volumes-engineconvexvolume). |
+| `Engine.LodMesh`, `Engine.SkeletalMesh`, `Engine.VertMesh`, `Engine.MeshAnimation` | [LOD meshes](#lod-meshes-enginelodmesh), [skeletal meshes](#skeletal-meshes-engineskeletalmesh), [vertex meshes](#vertex-meshes-enginevertmesh), [animations](#animations-enginemeshanimation). |
+| `Engine.Model`, `Engine.Polys` | [BSP models](#bsp-models-enginemodel), [brushes' polygons](#polygons-enginepolys). |
+| `Engine.Level`, `Engine.TerrainInfo`, `Engine.TerrainSector`, `Engine.TerrainPrimitive` | [Levels](#levels-enginelevel), [terrain](#terrain-engineterraininfo). |
+| `Editor.Prefab` | [Prefabs](#prefabs-editorprefab). |
+| `Engine.Animation` | A legacy class whose `Serialize` writes nothing, not even the tagged properties. Not read. |
+
+A licensee's native class could override `Serialize` too; it would show up as
+bytes left over after its parent's native data. None of Red Orchestra's or
+Darkest Hour's classes do.
+
+Some classes' native data has changed over time. usagi reads every version
+of it that a field merely appears in, but not the old layouts the engine
+converts as it loads them: static meshes and their instances before version
+112, Karma collision before 113, BSP models before 110, levels before 98, and
+terrain before 117 are refused, as textures before 84 are. No package in
+either install is that old.
+
+### Common structures
+
+| Structure | Stored as |
+|---|---|
+| `FVector` | `X`, `Y`, `Z` (`f32`s). |
+| `FPlane` | `X`, `Y`, `Z`, `W` (`f32`s). |
+| `FSphere` | An `FPlane`: centre and radius. Up to version 61, an `FVector` (no radius). |
+| `FBox` | `Min`, `Max` (`FVector`s), `IsValid` (`u8`). |
+| `FRotator` | `Pitch`, `Yaw`, `Roll` (`i32`s). |
+| `FQuat` | `X`, `Y`, `Z`, `W` (`f32`s). |
+| `FCoords` | `Origin`, `XAxis`, `YAxis`, `ZAxis` (`FVector`s). |
+| `FMatrix` | 16 `f32`s, row by row. |
+| `FColor` | `R`, `G`, `B`, `A` (`u8`s), by its `operator<<`. (A `Color` property is stored `B`, `G`, `R`, `A`.) |
+| `FRawIndexBuffer` | `Indices` (array of `u16`), `Revision` (`i32`). |
+| `FRawColorStream` | `Colors` (array of `FColor`), `Revision` (`i32`). |
+| `TArray<T>` | A compact index count, then the items. |
+| `TLazyArray<T>` | `SeekPos` (`i32`, from version 62), then a `TArray<T>`. See [Absolute offsets](#absolute-offsets-inside-export-data). |
+| `TMap<K,V>` | A `TArray` of pairs, key then value. |
+
+`UBOOL` is an `i32`, `DWORD` a `u32`, `_WORD` a `u16`, `QWORD` a `u64`. A field
+written with `AR_INDEX` is a compact index; that's noted as `index` below.
+
+### Primitives (`Engine.Primitive`)
+
+`UPrimitive::Serialize` writes `BoundingBox` (`FBox`) and `BoundingSphere`
+(`FSphere`). Static meshes, models, convex volumes, meshes and terrain
+primitives start with it.
+
+### Static meshes (`Engine.StaticMesh`)
+
+`UStaticMesh::Serialize`, from version 112, after the primitive's bounds:
+
+| Field | Type | Notes |
+|---|---|---|
+| `Sections` | array of `FStaticMeshSection` | Each `IsStrip` (`i32`), `FirstIndex`, `MinVertexIndex`, `MaxVertexIndex`, `NumTriangles`, `NumPrimitives` (`u16`s). |
+| `BoundingBox` | `FBox` | The primitive's again. |
+| `VertexStream` | `FStaticMeshVertexStream` | `Vertices` (array of `Position`, `Normal`: `FVector`s), `Revision` (`i32`). |
+| `ColorStream`, `AlphaStream` | `FRawColorStream` | |
+| `UVStreams` | array of `FStaticMeshUVStream` | Each `UVs` (array of `U`, `V`: `f32`s), `CoordinateIndex` (`i32`), `Revision` (`i32`). |
+| `IndexBuffer`, `WireframeIndexBuffer` | `FRawIndexBuffer` | |
+| `CollisionModel` | object | A model. |
+| `CollisionTriangles`, `CollisionNodes` | arrays | Before version 126. A triangle is `Plane`, three `SidePlanes` (`FPlane`s), three vertex indices and a material index (`index`es); a node is `TriangleIndex`, `CoplanarIndex`, two `ChildIndices` (`index`es) and an `FBox`. |
+| `kDOPTree` | `FkDOPTree` | From version 126, in place of the two above: `Nodes`, then `Triangles`. A node (`FkDOPNode`, `Engine/Inc/UnkDOP.h`) is its volume (three minimums, then three maximums, `f32`s), `bIsLeaf` (`i32`) and two `u16`s (a union: the children, or the triangles' count and first index). A triangle is three vertex indices and a material index (`u16`s). |
+| `UseSimpleLineCollision`, `UseSimpleBoxCollision`, `UseVertexColor` | `i32`s | Before version 114. |
+| `RawTriangles` | `TLazyArray<FStaticMeshTriangle>` | The triangles as imported. Each three vertices (`FVector`s), `NumUVs` (`i32`), then for each set of UVs, the three vertices' (`U`, `V`: `f32`s), three colours (`FColor`s), `MaterialIndex` (`i32`) and `SmoothingMask` (`u32`). The engine has room for 8 sets. |
+| `InternalVersion` | `i32` | When saving, the engine writes its own (`STATICMESH_VERSION`), whatever was loaded. |
+| `SmoothingThreshold` | `f32` | Only in licensee version 22 (`0x16`). |
+| `MaxSmoothingAngles` | array of `f32` | From licensee version 23. |
+| `KPhysicsProps` | object | Its Karma collision. |
+| `AuthenticationKey` | `u32` | From version 120. |
+
+A static mesh's materials (`Materials`) are a tagged property, not native
+data.
+
+### Static mesh instances (`Engine.StaticMeshInstance`)
+
+A static mesh actor's lighting, from version 112: `ColorStream`
+(`FRawColorStream`), then `Lights`, an array of `FStaticMeshLightInfo`
+(`LightActor`, an object; `VisibilityBits`, an array of bytes; `Applied`, an
+`i32`). Big maps have millions.
+
+### Karma collision (`Engine.KMeshProps`)
+
+`UKMeshProps::Serialize`, from version 113: `InertiaTensor` (six `f32`s),
+`COMOffset` (`FVector`), then `AggGeom` (`FKAggregateGeom`, `KTypes.h`):
+arrays of spheres (`TM`, an `FMatrix`, and `Radius`), boxes (`TM` and `X`,
+`Y`, `Z`), cylinders (`TM`, `Radius` and `Height`) and convex elements (`TM`
+and `VertexData`, an array of `FVector`s; their planes aren't stored). Before
+version 113 there are no convex elements, and the spheres are stored twice.
+
+### Convex volumes (`Engine.ConvexVolume`)
+
+After the primitive's bounds: `Faces` (each an `FPlane` and an array of
+`FVector`s), `Edges` (each two face indices and two vertex indices, `i32`s)
+and `BoundingBox` (`FBox`).
+
+### LOD meshes (`Engine.LodMesh`)
+
+`ULodMesh::Serialize`, what skeletal and vertex meshes start with, after the
+primitive's bounds (`UMesh` adds nothing). What's stored depends on
+`InternalVersion`, the mesh's own version, stored first:
+
+| Field | Type | Notes |
+|---|---|---|
+| `InternalVersion` | `i32` | When saving, the engine writes its own (`LODMESH_VERSION`). |
+| `ModelVerts` | `i32` | |
+| `Verts` | array of `u32` | Packed `FMeshVert`s: 11 bits of X, 11 of Y and 10 of Z. |
+| `Tris` | array of `FMeshTri` | Internal version 1 or older: three vertex indices (`u16`s), three UVs (`f32` pairs), `PolyFlags` (`u32`), `MaterialIndex` (`i32`). |
+| `Materials` | array of objects | |
+| `Scale`, `Origin` | `FVector`s | |
+| `RotOrigin` | `FRotator` | |
+| `CollapsePointThus` | array of `u16` | Internal version 1 or older. |
+| `FaceLevel` | array of `u16` | |
+| `Faces` | array of `FMeshFace` | Three wedge indices and a material index (`u16`s). |
+| `CollapseWedgeThus` | array of `u16` | |
+| `Wedges` | array of `FMeshWedge` | A vertex index (`u16`) and a UV (`f32` pair). |
+| `MeshMaterials` | array of `FMeshMaterial` | `PolyFlags` (`u32`), `MaterialIndex` (`i32`). |
+| `MeshScaleMax`, `LODHysteresis`, `LODStrength` | `f32`s | |
+| `LODMinVerts` | `i32` | |
+| `LODMorph`, `LODZDisplace` | `f32`s | |
+| `bImpostorPresent`, `ImpostorProps` | `i32`, `FImpostorProps` | Internal version 3 or newer. `FImpostorProps` is `Material` (object), `RelativeLocation` (`FVector`), `RelativeRotation` (`FRotator`), `Scale3D` (`FVector`), `ImpColor` (`FColor`), and `ImpSpaceMode`, `ImpDrawMode`, `ImpLightMode` (`i32`s), in that order. |
+| `SkinTesselationFactor` | `f32` | Internal version 4 or newer. |
+
+### Skeletal meshes (`Engine.SkeletalMesh`)
+
+`USkeletalMesh::Serialize`, after the LOD mesh's:
+
+| Field | Type | Notes |
+|---|---|---|
+| `Points` | array of `FVector` | |
+| `RefSkeleton` | array of `FMeshBone` | `Name` (name), `Flags` (`u32`), `BonePos` (`VJointPos`), `NumChildren`, `ParentIndex` (`i32`s). `VJointPos` is `Orientation` (`FQuat`), `Position` (`FVector`), then `Length`, `XSize`, `XSize` **again** and `ZSize` (`f32`s): its `operator<<` writes `XSize` twice and no `YSize`. |
+| `DefaultAnim` | object | |
+| `SkeletalDepth` | `i32` | |
+| `MultiBlends` | array of `VWeightIndex` | An array of `u16` and an `i32`. |
+| `Weights` | array of `VBoneInfluence` | Two `u16`s. |
+| `TagAliases`, `TagNames` | arrays of names | |
+| `TagCoords` | array of `FCoords` | |
+| `SmoothSections`, `StaticSections`, `CollapseRemap` | arrays | Internal version 1 or older: sections (below) and `u16`s. |
+| `LODModels` | array of `FStaticLODModel` | Internal version 2 or newer (below). |
+| `DefaultRefMesh` | object | Internal version 2 or newer, as are the raw arrays that follow. |
+| `RawVerts`, `RawWedges`, `RawFaces`, `RawInfluences`, `RawCollapseWedges`, `RawFaceLevel` | lazy arrays | Of `FVector`, `FMeshWedge`, `VTriangle` (three wedge indices, `u16`s; `MatIndex`, `AuxMatIndex`, `u8`s; `SmoothingGroups`, `u32`), `FVertInfluence` (`Weight`, `f32`; `VertIndex`, `BoneIndex`, `u16`s), `u16` and `u16`. |
+| `AuthenticationKey` | `u32` | From version 120. |
+| `KPhysicsProps` | object | From version 122, with the next three. |
+| `BoneCollisionSpheres` | array of `FSkelBoneSphere` | `BoneName` (name), `Offset` (`FVector`), `Radius` (`f32`), then from version 124 `bBlockKarma`, and from 125 `bBlockNonZeroExtent` and `bBlockZeroExtent` (`i32`s). |
+| `BoneCollisionBoxes` | array of `FSkelBoneBox` | As a sphere, with `Radii` (`FVector`) for `Radius`. |
+| `BoneCollisionBoxModels` | array of objects | |
+| `CollisionStaticMesh` | object | From version 127. |
+
+A section (`FLODMeshSection`, `FSkelMeshSection`) is nine `u16`s:
+`MaterialIndex`, `FirstIndex`, `MinIndex`, `MaxIndex`, `TotalVerts`,
+`MaxInfluences`, `ShaderIndex`, `FirstFace`, `TotalFaces`. An
+`FStaticLODModel` is `SkinningStream` (array of `u32`), `SmoothVerts` (array
+of an `FVector` and a packed normal, `u32`), `SmoothStreamWedges` (`i32`),
+`SmoothSections` and `RigidSections` (arrays of sections),
+`SmoothIndexBuffer` and `RigidIndexBuffer` (`FRawIndexBuffer`s),
+`RigidVertexStream` (`FSkinVertexStream`: `Revision`, `bPartial`,
+`bStreamCallback`, `i32`s, and `Vertices`, an array of `Position` and
+`Normal`, `FVector`s, and `U`, `V`, `f32`s), the lazy arrays `Influences`,
+`Wedges`, `Faces` and `Points`, then `DisplayFactor`, `LODHysteresis`
+(`f32`s), `DupVertCount`, `MaxInfluences`, `bUniqueSubset` and
+`bUseSmoothing` (`i32`s).
+
+### Vertex meshes (`Engine.VertMesh`)
+
+`UVertMesh::Serialize`, after the LOD mesh's: `VertexStream`
+(`FAnimMeshVertexStream`: `Vertices`, as a skin vertex stream's, and
+`Revision`), `AnimVerts` (array of packed `FMeshVert`s, `u32`), `FrameKeys`
+(array of `f32`), `AnimSeqs` (array of `FMeshAnimSeq`, below), `AnimNormals`
+(array of packed `FMeshNorm`s, `u32`), `FrameVerts` and `AnimFrames`
+(`i32`s), `BoundingBoxes` (array of `FBox`) and `BoundingSpheres` (array of
+`FSphere`). None are in Red Orchestra's packages.
+
+### Animations (`Engine.MeshAnimation`)
+
+`UMeshAnimation::Serialize`: `InternalVersion` (`i32`), `RefBones` (array of
+`FNamedBone`: a name, `Flags`, `u32`, and `ParentIndex`, `i32`), `Moves`
+(array of `MotionChunk`), and `AnimSeqs` (array of `FMeshAnimSeq`).
+
+A `MotionChunk` is `RootSpeed3D` (`FVector`), `TrackTime` (`f32`),
+`StartBone` (`i32`), `Flags` (`u32`), `BoneIndices` (array of `i32`),
+`AnimTracks` (array of `AnalogTrack`) and `RootTrack` (an `AnalogTrack`). An
+`AnalogTrack` is `Flags` (`u32`), `KeyQuat` (array of `FQuat`), `KeyPos`
+(array of `FVector`) and `KeyTime` (array of `f32`).
+
+An `FMeshAnimSeq` (`Engine/Src/UnMesh.cpp`) is `Bookmark` (`f32`, from
+version 115), `Name` (name), `Groups` (array of names), `StartFrame`,
+`NumFrames` (`i32`s), `Notifys` (array of `FMeshAnimNotify`: `Time`, `f32`;
+`Function`, a name; and from version 112, `NotifyObject`, an object) and
+`Rate` (`f32`), in that order.
+
+### BSP models (`Engine.Model`)
+
+A level's geometry, or a brush's. `UModel::Serialize`, from version 110,
+after the primitive's bounds:
+
+| Field | Type | Notes |
+|---|---|---|
+| `Vectors`, `Points` | arrays of `FVector` | |
+| `Nodes` | array of `FBspNode` | Below. |
+| `Surfs` | array of `FBspSurf` | `Material` (object), `PolyFlags` (`u32`), `pBase`, `vNormal`, `vTextureU`, `vTextureV`, `iBrushPoly` (`index`es), `Actor` (object), `Plane` (`FPlane`), `LightMapScale` (`f32`). |
+| `Verts` | array of `FVert` | `pVertex`, `iSide` (`index`es). |
+| `NumSharedSides`, `NumZones` | `i32`s | |
+| `Zones` | `NumZones` × `FZoneProperties` | `ZoneActor` (object), `Connectivity`, `Visibility` (`u64`s), `LastRenderTime` (`f32`). No count of its own; there's room for 64. |
+| `Polys` | object | The brush's polygons. |
+| `Bounds` | array of `FBox` | |
+| `LeafHulls` | array of `i32` | |
+| `Leaves` | array of `FLeaf` | `iZone`, `iPermeating`, `iVolumetric` (`index`es), `VisibleZones` (`u64`). |
+| `Lights` | array of objects | |
+| `RootOutside`, `Linked` | `i32`s | |
+| `Sections` | array of `FBspSection` | `Vertices` (`FBspVertexStream`: an array of `Position` (`FVector`), `U`, `V`, `U2`, `V2` (`f32`s) and `Normal` (`FVector`), then `Revision`), `Material` (object), `NumNodes` (`i32`), `PolyFlags` (`u32`), `iLightMapTexture` (`i32`). |
+| `LightMaps` | array of `FLightMap` | `iTexture`, `iSurf`, `iZone`, `OffsetX`, `OffsetY`, `SizeX`, `SizeY` (`index`es), `WorldToLightMap` (`FMatrix`), `LightMapBase`, `LightMapX`, `LightMapY` (`FVector`s), `Bitmaps` (array of `FLightBitmap`: `LightActor`, an object; `Bits`, an array of bytes; `SizeX`, `SizeY`, `Stride`, `MinX`, `MinY`, `MaxX`, `MaxY`, `i32`s), `Level` (object), `Revision` (`i32`). |
+| `LightMapTextures` | array of `FLightMapTexture` | `Level` (object), `LightMaps` (array of `i32`), `CacheId` (`u64`), `Revision` (`i32`), and from version 116 `StaticTexture` (`FStaticLightMapTexture`: two lazy arrays of bytes, its mipmaps, then `Format` (`u8`), `Width`, `Height`, `Revision` (`i32`s)). |
+
+An `FBspNode` is `Plane` (`FPlane`), `ZoneMask` (`u64`), `NodeFlags` (`u8`),
+`iVertPool`, `iSurf`, three children (back, front, coplanar),
+`iCollisionBound` and `iRenderBound` (`index`es), `ExclusiveSphereBound`
+(`FSphere`), before version 123 `InclusiveSphereBound` (`FSphere`), two
+`iZone`s and `NumVertices` (`u8`s), two `iLeaf`s, `iSection`, `iFirstVertex`
+and `iLightMap` (`i32`s).
+
+### Polygons (`Engine.Polys`)
+
+A brush's polygons (`UPolys::Serialize`): `DbNum` and `DbMax` (`i32`s: the
+number of polygons, and, when saved, the same number again), then `DbNum`
+`FPoly`s. An `FPoly` is `NumVertices` (`index`, at most 16), `Base`,
+`Normal`, `TextureU`, `TextureV` (`FVector`s), `NumVertices` vertices
+(`FVector`s), `PolyFlags` (`u32`), `Actor`, `Material` (objects), `ItemName`
+(name), `iLink`, `iBrushPoly` (`index`es), before version 78 `PanU` and
+`PanV` (`i16`s), and from version 106 `LightMapScale` (`f32`).
+
+### Levels (`Engine.Level`)
+
+`ULevelBase::Serialize` and `ULevel::Serialize`, from version 98: the actors,
+as polygons are stored (`DbNum`, `DbMax`, then `DbNum` objects), `URL`
+(`FURL`: `Protocol`, `Host`, `Map`, `Portal`, `FString`s; `Op`, an array of
+`FString`s; `Port`, `Valid`, `i32`s), `Model` (object), `TimeSeconds`
+(`f32`), `FirstDeleted` (object), 16 `TextBlocks` (objects), and
+`TravelInfo` (`TMap<FString,FString>`).
+
+### Terrain (`Engine.TerrainInfo`)
+
+A terrain is an actor whose class has its own `Serialize`. `ATerrainInfo`'s,
+from version 117: `Sectors` (array of objects), `Vertices` (array of
+`FVector`), `SectorsX`, `SectorsY` (`i32`s), `FaceNormals` (array of
+`FTerrainNormalPair`: two `FVector`s), `ToWorld`, `ToHeightmap` (`FCoords`),
+`HeightmapX`, `HeightmapY` (`i32`s) and `VertexColors` (array of `FColor`).
+Its layers and decorations are tagged properties.
+
+A terrain sector (`UTerrainSector::Serialize`), from version 117: `Info`
+(object), `QuadsX`, `QuadsY`, `OffsetX`, `OffsetY` (`i32`s), `BoundingBox`
+(`FBox`), `LightInfos` (array of `FTerrainSectorLightInfo`: `LightActor`, an
+object, and `VisibilityBitmap`, an array of bytes).
+
+A terrain primitive (`UTerrainPrimitive::Serialize`): the primitive's bounds,
+then `Info` (object).
+
 ## Compressed packages (`.uz2`)
 
 Packages for redirect downloads are compressed with `ucc compress` into
@@ -811,3 +1164,25 @@ Checks worth making, since the engine makes them: name indices in range,
 object references in range, import outers that are imports, export outers
 that are exports, top-level imports of class `Core.Package`, and export data
 within the file.
+
+## Writing a package
+
+usagi writes a package as `UObject::SavePackage` lays it out
+([File layout](#file-layout)): the summary, the name table, each export's
+data in export table order with nothing between them, the import table and
+the export table, and the summary's offsets and every export's
+`SerialOffset` worked out from where things land. It keeps the names,
+imports and exports in their order, rather than sorting them again as the
+engine does, so every index in exports' data stays right. Names are written
+as they were stored (Latin-1 or UTF-16, and longer than the 63 characters
+the engine keeps).
+
+An export's data is copied, unless it moves and its native data holds
+[absolute offsets](#absolute-offsets-inside-export-data): then the native
+data is read and written again at the new offset (its properties are
+copied). That needs its native class, so an export that moves and whose
+class can't be found, or isn't read, stops the write. A package before
+version 68 (with a heritage table) isn't written.
+
+A package saved by the engine, written with no changes, gives the same
+bytes: every package in both installs does.

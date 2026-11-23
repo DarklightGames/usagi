@@ -88,6 +88,16 @@ impl Package {
         &self.tables.names
     }
 
+    /// The bytes of the whole package (decompressed, for a `.uz2`).
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes.0
+    }
+
+    /// Name `index`'s string as it's stored in the name table.
+    pub(crate) fn raw_name(&self, index: usize) -> &[u8] {
+        &self.tables.raw_names[index]
+    }
+
     /// The import table. Import `i` is [`ObjectRef::Import(i)`], stored on
     /// disk as `-i - 1`.
     pub fn imports(&self) -> &[Import] {

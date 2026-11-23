@@ -272,34 +272,35 @@ pub enum PropertyKind {
 }
 
 impl PropertyKind {
-    /// The kind of property of class `class` (`IntProperty`, ...), with its
-    /// references not yet read; `None` if it isn't a property class.
+    /// The kind of property of class `class` (`IntProperty`, ..., in any
+    /// case), with its references not yet read; `None` if it isn't a
+    /// property class.
     pub fn of_class(class: &str) -> Option<PropertyKind> {
         let null = ObjectRef::Null;
-        Some(match class {
-            "ByteProperty" => PropertyKind::Byte { enumeration: null },
-            "IntProperty" => PropertyKind::Int,
-            "BoolProperty" => PropertyKind::Bool,
-            "FloatProperty" => PropertyKind::Float,
-            "ObjectProperty" => PropertyKind::Object { class: null },
-            "ClassProperty" => PropertyKind::Class {
+        Some(match class.to_ascii_lowercase().as_str() {
+            "byteproperty" => PropertyKind::Byte { enumeration: null },
+            "intproperty" => PropertyKind::Int,
+            "boolproperty" => PropertyKind::Bool,
+            "floatproperty" => PropertyKind::Float,
+            "objectproperty" => PropertyKind::Object { class: null },
+            "classproperty" => PropertyKind::Class {
                 class: null,
                 meta_class: null,
             },
-            "NameProperty" => PropertyKind::Name,
-            "StrProperty" => PropertyKind::Str,
-            "DelegateProperty" => PropertyKind::Delegate { function: null },
-            "FixedArrayProperty" => PropertyKind::FixedArray {
+            "nameproperty" => PropertyKind::Name,
+            "strproperty" => PropertyKind::Str,
+            "delegateproperty" => PropertyKind::Delegate { function: null },
+            "fixedarrayproperty" => PropertyKind::FixedArray {
                 inner: null,
                 count: 0,
             },
-            "ArrayProperty" => PropertyKind::Array { inner: null },
-            "MapProperty" => PropertyKind::Map {
+            "arrayproperty" => PropertyKind::Array { inner: null },
+            "mapproperty" => PropertyKind::Map {
                 key: null,
                 value: null,
             },
-            "StructProperty" => PropertyKind::Struct { structure: null },
-            "PointerProperty" => PropertyKind::Pointer,
+            "structproperty" => PropertyKind::Struct { structure: null },
+            "pointerproperty" => PropertyKind::Pointer,
             _ => return None,
         })
     }

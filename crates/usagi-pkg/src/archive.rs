@@ -50,44 +50,37 @@ pub trait Archive {
 
     fn u8(&mut self, value: &mut u8, what: &'static str) -> Result<()> {
         let mut bytes = [*value];
-        self.raw(&mut bytes, what)?;
-        *value = bytes[0];
-        Ok(())
+        self.raw(&mut bytes, what).map(|()| *value = bytes[0])
     }
 
     fn u16(&mut self, value: &mut u16, what: &'static str) -> Result<()> {
         let mut bytes = value.to_le_bytes();
-        self.raw(&mut bytes, what)?;
-        *value = u16::from_le_bytes(bytes);
-        Ok(())
+        self.raw(&mut bytes, what)
+            .map(|()| *value = u16::from_le_bytes(bytes))
     }
 
     fn u32(&mut self, value: &mut u32, what: &'static str) -> Result<()> {
         let mut bytes = value.to_le_bytes();
-        self.raw(&mut bytes, what)?;
-        *value = u32::from_le_bytes(bytes);
-        Ok(())
+        self.raw(&mut bytes, what)
+            .map(|()| *value = u32::from_le_bytes(bytes))
     }
 
     fn i32(&mut self, value: &mut i32, what: &'static str) -> Result<()> {
         let mut bytes = value.to_le_bytes();
-        self.raw(&mut bytes, what)?;
-        *value = i32::from_le_bytes(bytes);
-        Ok(())
+        self.raw(&mut bytes, what)
+            .map(|()| *value = i32::from_le_bytes(bytes))
     }
 
     fn u64(&mut self, value: &mut u64, what: &'static str) -> Result<()> {
         let mut bytes = value.to_le_bytes();
-        self.raw(&mut bytes, what)?;
-        *value = u64::from_le_bytes(bytes);
-        Ok(())
+        self.raw(&mut bytes, what)
+            .map(|()| *value = u64::from_le_bytes(bytes))
     }
 
     fn f32(&mut self, value: &mut f32, what: &'static str) -> Result<()> {
         let mut bytes = value.to_le_bytes();
-        self.raw(&mut bytes, what)?;
-        *value = f32::from_le_bytes(bytes);
-        Ok(())
+        self.raw(&mut bytes, what)
+            .map(|()| *value = f32::from_le_bytes(bytes))
     }
 
     /// An object reference: a compact index.
@@ -109,12 +102,24 @@ impl dyn Archive + '_ {
             offset: at,
             reason: format!("the {} has {} items", what, count),
         })?;
+        self.items(items, count)
+    }
+
+    /// `count` items: read into `items`, or written from them.
+    pub(crate) fn items<T: Serialize>(&mut self, items: &mut Vec<T>, count: usize) -> Result<()> {
         if self.is_loading() {
             items.clear();
-            items.resize_with(count, T::default);
+            // Every item takes at least a byte: if there aren't `count`
+            // bytes left, it fails before the end, so reserve nothing.
+            if self.peek(count).is_some() {
+                items.reserve(count);
+            }
         }
-        for item in items {
-            item.serialize(self)?;
+        for i in 0..count {
+            if self.is_loading() {
+                items.push(T::default());
+            }
+            items[i].serialize(self)?;
         }
         Ok(())
     }
@@ -126,7 +131,111 @@ pub trait Serialize: Default {
     /// Reads into `self` when `ar` is loading; writes `self` when it's
     /// saving.
     fn serialize(&mut self, ar: &mut dyn Archive) -> Result<()>;
+
+    /// A `TArray` of them, named `what` in errors: a compact index count,
+    /// then the items.
+    fn serialize_array(
+        items: &mut Vec<Self>,
+        ar: &mut dyn Archive,
+        what: &'static str,
+    ) -> Result<()> {
+        ar.array_of(items, what)
+    }
 }
+
+/// Values the engine writes with `Ar << Value` as their bytes, little-endian:
+/// `_WORD`, `DWORD`, `INT` (and `UBOOL`), `QWORD` and `FLOAT`.
+macro_rules! serialize_primitive {
+    ($($ty:ty => $method:ident),* $(,)?) => {
+        $(
+            impl Serialize for $ty {
+                fn serialize(&mut self, ar: &mut dyn Archive) -> Result<()> {
+                    ar.$method(self, "native data")
+                }
+            }
+        )*
+    };
+}
+
+serialize_primitive! {
+    u16 => u16,
+    u32 => u32,
+    i32 => i32,
+    u64 => u64,
+    f32 => f32,
+}
+
+/// A `BYTE`. A `TArray<BYTE>` is read and written in one go, as the engine
+/// does.
+impl Serialize for u8 {
+    fn serialize(&mut self, ar: &mut dyn Archive) -> Result<()> {
+        ar.u8(self, "native data")
+    }
+
+    fn serialize_array(
+        items: &mut Vec<u8>,
+        ar: &mut dyn Archive,
+        what: &'static str,
+    ) -> Result<()> {
+        byte_array(ar, items, what)
+    }
+}
+
+/// An `INT` the engine writes as a compact index (`AR_INDEX(Value)`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Index(pub i32);
+
+impl Serialize for Index {
+    fn serialize(&mut self, ar: &mut dyn Archive) -> Result<()> {
+        ar.index(&mut self.0, "native data")
+    }
+}
+
+/// A `TArray`: a compact index count, then the items.
+impl<T: Serialize> Serialize for Vec<T> {
+    fn serialize(&mut self, ar: &mut dyn Archive) -> Result<()> {
+        T::serialize_array(self, ar, "array")
+    }
+}
+
+/// A C array (`FVector Vertices[3]`): its elements, with no count.
+impl<T: Serialize, const N: usize> Serialize for [T; N]
+where
+    [T; N]: Default,
+{
+    fn serialize(&mut self, ar: &mut dyn Archive) -> Result<()> {
+        for item in self {
+            item.serialize(ar)?;
+        }
+        Ok(())
+    }
+}
+
+/// Declares a struct whose `operator<<` writes its fields in order, each as
+/// its type does, and implements [`Serialize`] for it.
+macro_rules! native_struct {
+    (
+        $(#[$meta:meta])*
+        pub struct $name:ident {
+            $($(#[$field_meta:meta])* pub $field:ident: $ty:ty,)*
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Default, PartialEq)]
+        pub struct $name {
+            $($(#[$field_meta])* pub $field: $ty,)*
+        }
+
+        impl $crate::archive::Serialize for $name {
+            fn serialize(&mut self, ar: &mut dyn $crate::archive::Archive) -> $crate::Result<()> {
+                $($crate::archive::Serialize::serialize(&mut self.$field, ar)?;)*
+                Ok(())
+            }
+        }
+    };
+}
+
+pub(crate) use native_struct;
 
 /// A name in the package's name table, by index, as it's stored.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -232,36 +341,55 @@ pub struct LazyArray<T> {
     pub items: Vec<T>,
 }
 
-impl Serialize for LazyArray<u8> {
+impl<T: Serialize> Serialize for LazyArray<T> {
     fn serialize(&mut self, ar: &mut dyn Archive) -> Result<()> {
-        if ar.version() <= 61 {
-            // Only the array: the engine works out where it ends.
-            return byte_array(ar, &mut self.items, "lazy array");
-        }
-        let at = ar.pos();
-        if !ar.is_loading() {
-            let count = i32::try_from(self.items.len()).expect("fewer than 2^31 bytes");
-            let end = ar.file_offset() + at + 4 + compact_index(count).len() + self.items.len();
-            self.seek_pos = Some(i32::try_from(end).expect("a file smaller than 2 GiB"));
-        }
-        let seek_pos = self.seek_pos.get_or_insert(0);
-        ar.i32(seek_pos, "lazy array")?;
-        let seek_pos = i64::from(*seek_pos);
-        byte_array(ar, &mut self.items, "lazy array")?;
-        if ar.is_loading() {
-            // The engine carries on from `SeekPos`: skip to it.
-            let end = (ar.file_offset() + ar.pos()) as i64;
-            let skip = usize::try_from(seek_pos - end).map_err(|_| Error::InvalidData {
-                offset: at,
-                reason: format!(
-                    "the lazy array ends at {:#X}, after its SeekPos, {:#X}",
-                    end, seek_pos
-                ),
-            })?;
-            ar.bytes(&mut Vec::new(), skip, "lazy array")?;
-        }
-        Ok(())
+        let items = &mut self.items;
+        lazy_array(ar, &mut self.seek_pos, &mut |ar: &mut dyn Archive| {
+            T::serialize_array(items, ar, "lazy array")
+        })
     }
+}
+
+/// A lazy array whose items are read or written by `items`.
+fn lazy_array(
+    ar: &mut dyn Archive,
+    seek_pos: &mut Option<i32>,
+    items: &mut dyn FnMut(&mut dyn Archive) -> Result<()>,
+) -> Result<()> {
+    if ar.version() <= 61 {
+        // Only the array: the engine works out where it ends.
+        return items(ar);
+    }
+    let at = ar.pos();
+    // When saving, `SeekPos` comes first, and is where the array ends:
+    // write the array aside to know its size.
+    let mut written = None;
+    if !ar.is_loading() {
+        let mut saver = Saver::new(ar.version(), ar.licensee_version());
+        items(&mut saver)?;
+        let bytes = saver.into_bytes();
+        let end = ar.file_offset() + at + 4 + bytes.len();
+        *seek_pos = Some(i32::try_from(end).expect("a file smaller than 2 GiB"));
+        written = Some(bytes);
+    }
+    let seek_pos = seek_pos.get_or_insert(0);
+    ar.i32(seek_pos, "lazy array")?;
+    if let Some(mut bytes) = written {
+        let len = bytes.len();
+        return ar.bytes(&mut bytes, len, "lazy array");
+    }
+    let seek_pos = i64::from(*seek_pos);
+    items(ar)?;
+    // The engine carries on from `SeekPos`: skip to it.
+    let end = (ar.file_offset() + ar.pos()) as i64;
+    let skip = usize::try_from(seek_pos - end).map_err(|_| Error::InvalidData {
+        offset: at,
+        reason: format!(
+            "the lazy array ends at {:#X}, after its SeekPos, {:#X}",
+            end, seek_pos
+        ),
+    })?;
+    ar.bytes(&mut Vec::new(), skip, "lazy array")
 }
 
 /// A `TArray<BYTE>`: a compact index count, then the bytes.
@@ -472,7 +600,7 @@ impl Archive for Saver {
 /// FCompactIndex&)` in `Core/Src/UnObj.cpp`): the sign and 6 bits, then up
 /// to three bytes of 7 bits and one of 8, least significant first, each
 /// with a bit saying whether another follows.
-fn compact_index(value: i32) -> Vec<u8> {
+pub(crate) fn compact_index(value: i32) -> Vec<u8> {
     let mut v = value.unsigned_abs();
     let mut b0 = if value < 0 { 0x80 } else { 0 };
     if v < 0x40 {

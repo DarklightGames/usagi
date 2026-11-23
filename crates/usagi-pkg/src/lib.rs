@@ -4,15 +4,19 @@
 //!
 //! The format is described in `docs/PACKAGE_FORMAT.md` in the repository.
 //! The summary and the name, import and export tables are read, and in each
-//! export's data, its tagged properties ([`Package::properties`]) and, for
-//! classes, states, functions, structs, property declarations and the like,
-//! its native data ([`Package::class`], [`Package::read_native`]), and
-//! textures' and sounds' ([`Package::texture`], [`Texture`], [`Sound`]).
+//! export's data, its tagged properties ([`Package::properties`]) and its
+//! native data, for every class that has any in UT2004's and Red
+//! Orchestra's packages: classes, states, functions and property
+//! declarations, textures, sounds, fonts, meshes, animations, BSP models,
+//! levels and terrain ([`Package::native_data`], [`Native`]).
 //!
 //! Native data is read and written by one function per type, as the engine
-//! does ([`archive::Serialize`]), so what's read can be written back the
-//! same. [`Packages`] finds the packages a package refers to, and reads
-//! tagged properties by their declarations ([`Packages::properties`]).
+//! does ([`archive::Serialize`]), so what's read writes back the same
+//! ([`Package::round_trip`]). [`Packages`] finds the packages a package
+//! refers to, the native class whose data an object has
+//! ([`Packages::native_class`]), and reads tagged properties by their
+//! declarations ([`Packages::properties`]). A package can be written again,
+//! as the engine lays it out ([`Package::write_with`], [`Packages::write`]).
 //! [`diff`] compares two versions of a package.
 //!
 //! ```no_run
@@ -27,7 +31,12 @@ pub mod diff;
 mod edit;
 mod error;
 mod flags;
+pub mod level;
+pub mod math;
 mod media;
+pub mod mesh;
+pub mod model;
+mod native;
 mod package;
 mod packages;
 mod pattern;
@@ -38,6 +47,7 @@ mod summary;
 mod tables;
 pub mod uz2;
 pub mod volatile;
+mod write;
 
 pub use class::{
     Class, Const, Dependency, Enum, Field, Function, PropertyDecl, PropertyKind, State, StateFrame,
@@ -47,7 +57,12 @@ pub use edit::set_package_flags;
 pub use error::{Error, Result};
 pub use flags::{ObjectFlags, PackageFlags};
 pub use media::{
-    Mipmap, SOUND_GROUP_SOUNDS_LICENSEE_VERSION, Sound, SoundGroup, TEXTURE_MIPS_VERSION, Texture,
+    CharRemap, FONT_CHARACTERS_LICENSEE_VERSION, FireTexture, Font, FontCharacter, Mipmap,
+    OldFontCharacter, OldFontPage, Palette, Prefab, ProceduralSound,
+    SOUND_GROUP_SOUNDS_LICENSEE_VERSION, Sound, SoundGroup, Spark, TEXTURE_MIPS_VERSION, Texture,
+};
+pub use native::{
+    Native, NativeClass, NativeData, NativeKind, NativeLookup, ROUND_TRIP_MOVE, RoundTrip,
 };
 pub use package::{Package, package_name};
 pub use packages::{Decl, Lookup, Packages, Scope, SearchPath, Type};
@@ -57,3 +72,4 @@ pub use summary::{
     Generation, Guid, Heritage, PACKAGE_FILE_TAG, Summary, TRIPWIRE_PACKAGE_FILE_TAG,
 };
 pub use tables::{Export, Import, NameEntry, ObjectRef};
+pub use write::WRITE_MIN_VERSION;
