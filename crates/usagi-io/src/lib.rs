@@ -2,7 +2,7 @@
 //!
 //! Objects' native data, as [`usagi_pkg`] reads it, is turned into a few
 //! game-independent asset models by adapters (a `Sound` into an
-//! [`Audio`]), and [`Writer`]s write a model to a file format. N kinds of
+//! [`Audio`], a `Texture` into an [`Image`]), and [`Writer`]s write a model to a file format. N kinds of
 //! object and M formats take N + M pieces of code, not N × M. The design is
 //! in `docs/ASSET_PIPELINE.md` in the repository.
 //!
@@ -16,8 +16,11 @@
 //! ```
 
 mod audio;
+mod dxt;
+mod image;
 
 pub use audio::{Audio, AudioFormat, WavWriter};
+pub use image::{DdsWriter, Image, Level, Pixels, PngWriter, TgaWriter, Unusable};
 
 use std::fmt;
 
