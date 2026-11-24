@@ -1764,3 +1764,69 @@ fn invalid_suppression() {
         vec!["S003", "S017"]
     );
 }
+
+#[test]
+fn redundant_default_return() {
+    let class = |function: &str| format!("class Foo extends Object;\n{}\n", function);
+    for function in [
+        "function int F() { return 0; }",
+        "function byte F() { return 0; }",
+        "function float F() { return 0.0; }",
+        "function bool F() { return False; }",
+        "function string F() { return \"\"; }",
+        "function name F() { return ''; }",
+        "function name F() { return 'None'; }",
+        "function Actor F() { return None; }",
+        "function class<Actor> F() { return None; }",
+        "function EFoo F() { return 0; }",
+        "function vector F() { return vect(0,0,0); }",
+        "function rotator F() { return rot(0,0,0); }",
+        "simulated event int F(int A) { return 0; }",
+        "state S { function int F() { return 0; } }",
+    ] {
+        assert_eq!(only(&["R017"], &class(function)), vec!["R017"], "{}", function);
+    }
+    for function in [
+        "function int F() { return 1; }",
+        "function F() { return; }",
+        "function int F();",
+        "function float F() { return -0.0; }",
+        "function bool F() { return True; }",
+        "function string F() { return \"A\"; }",
+        "function name F() { return 'A'; }",
+        "function int F() { return None; }",
+        "function vector F() { return vect(0,0,1); }",
+        "function rotator F() { return rot(1,0,0); }",
+        "function rotator F() { return vect(0,0,0); }",
+        "function vector F() { return rot(0,0,0); }",
+        "function int F() { local int A; return 0; }",
+        "function int F() { F(); return 0; }",
+        "function int F() { return F(); }",
+    ] {
+        assert_eq!(
+            only(&["R017"], &class(function)),
+            Vec::<&str>::new(),
+            "{}",
+            function
+        );
+    }
+    assert_fix(
+        "R017",
+        "class Foo extends Object;\nfunction int F()\n{\n    return 0;\n}\n",
+        "class Foo extends Object;\nfunction int F();\n",
+    );
+    assert_fix(
+        "R017",
+        "class Foo extends Object;\nfunction bool F(int A) { return false; }\n",
+        "class Foo extends Object;\nfunction bool F(int A);\n",
+    );
+    // No fix when it would lose a comment.
+    let source = "class Foo extends Object;\nfunction int F()\n{\n    return 0; // stub\n}\n";
+    let result = parse_program(source).unwrap();
+    let error = result
+        .errors
+        .iter()
+        .find(|e| e.lint.is_some_and(|l| l.code() == "R017"))
+        .unwrap();
+    assert!(error.fix.is_none());
+}

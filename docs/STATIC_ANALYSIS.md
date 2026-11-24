@@ -178,6 +178,7 @@ never applied from the command line; they are for an editor to offer.
 | R014 | `redundant-case-before-default` | Warning | Sometimes | An empty `case` label directly before `default:`, which runs the same code without it. Labels whose value has side effects, such as a function call, are allowed. |
 | R015 | `redundant-var-category` | Warning | Yes | A `var(Category)` whose category is the class's name, e.g. `var(Foo)` in class `Foo`. `var()` already uses the class's name. |
 | R016 | `unused-suppression` | Warning | Yes | A lint selector in a `usagi: ignore[...]` or `usagi: ignore-file[...]` comment that suppresses nothing (see [Suppression comments](#suppression-comments)). The fix removes the selector, or the comment if none of its selectors suppress anything. |
+| R017 | `redundant-default-return` | Warning | Sometimes | A function whose body is only `return` of its return type's default value (`0`, `False`, `""`, `''`, `None`, `vect(0,0,0)`, `rot(0,0,0)`), which is what it returns without a body. The fix replaces the body with `;`, unless a comment is in it. |
 
 ### Naming
 

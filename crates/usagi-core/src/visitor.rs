@@ -1676,6 +1676,7 @@ impl Visit for AstNode<FunctionDeclaration> {
             )
         }
 
+        check_redundant_default_return(self, visitor);
         check_duplicate_modifiers(
             self.modifiers
                 .iter()
@@ -1727,6 +1728,91 @@ impl Visit for AstNode<FunctionDeclaration> {
             returns_value: Some(self.return_type.is_some()),
             ..CodeContext::default()
         };
+/// Reports a function whose body is nothing but `return` of its return
+/// type's default value (`0`, `False`, `""`, `''`, `None`, `vect(0,0,0)`,
+/// `rot(0,0,0)`), which is what a function without a body returns.
+fn check_redundant_default_return(
+    function: &AstNode<FunctionDeclaration>,
+    visitor: &mut Visitor,
+) {
+    let (Some(return_type), Some(body)) = (&function.return_type, &function.body) else {
+        return;
+    };
+    let [FunctionBodyStatement::CodeStatement(statement)] = body.statements.as_slice() else {
+        return;
+    };
+    let CodeStatement::Return(Some(value)) = &statement.data else {
+        return;
+    };
+    let Expression::Literal(literal) = &value.data else {
+        return;
+    };
+    if !is_default_value(return_type, &literal.data) {
+        return;
+    }
+    // The braces are the only non-whitespace between the header and the
+    // body, unless there are comments, which the fix mustn't lose.
+    let contents = visitor.contents;
+    let open = contents[..body.span.start]
+        .rfind('{')
+        .expect("a function body follows `{`");
+    let close = body.span.end
+        + contents[body.span.end..]
+            .find('}')
+            .expect("a function body ends with `}`");
+    let start = contents[..open].trim_end().len();
+    let fix = (!visitor.has_comment_in(start..close + 1)).then(|| {
+        Fix::safe(
+            "Remove the function's body",
+            vec![Edit::replace(start..close + 1, ";")],
+        )
+    });
+    visitor.report_with_optional_fix(
+        Lint::RedundantDefaultReturn,
+        format!(
+            "{} only returns the default value, which it would return without a body",
+            function.name.string
+        ),
+        statement.span,
+        fix,
+    )
+}
+
+fn is_zero(n: &NumericLiteral) -> bool {
+    match n {
+        NumericLiteral::Integer(i) => *i == 0,
+        NumericLiteral::Float(f) => *f == 0.0 && f.is_sign_positive(),
+    }
+}
+
+/// Whether `literal` is the value a function returning `type_` returns
+/// without a body.
+fn is_default_value(type_: &Type, literal: &Literal) -> bool {
+    match (type_, literal) {
+        (Type::Pod(PodType::Byte | PodType::Int | PodType::Float), Literal::Numeric(n)) => {
+            is_zero(&n.data)
+        }
+        (Type::Pod(PodType::Bool), Literal::Boolean(b)) => !b,
+        // String literals keep their quotes.
+        (Type::Pod(PodType::String), Literal::String(s)) => s == "\"\"",
+        (Type::Pod(PodType::Name), Literal::Name(n)) => {
+            n.is_empty() || n.eq_ignore_ascii_case("None")
+        }
+        (Type::Class(_), Literal::None) => true,
+        // A named type is a class, struct or enum. Only an object can be
+        // `None`, and an enum's default is its first value, 0.
+        (Type::Identifier(_), Literal::None) => true,
+        (Type::Identifier(_), Literal::Numeric(n)) => is_zero(&n.data),
+        (Type::Identifier(i), Literal::Vector(v)) => {
+            i.string.eq_ignore_ascii_case("Vector") && v.iter().all(|n| is_zero(&n.data))
+        }
+        (Type::Identifier(i), Literal::Rotator(r)) => {
+            i.string.eq_ignore_ascii_case("Rotator") && r.iter().all(|n| is_zero(&n.data))
+        }
+        _ => false,
+    }
+}
+
         visitor.with_code_context(context, |visitor| {
             for argument in &self.arguments {
                 argument.type_.visit(visitor);

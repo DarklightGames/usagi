@@ -231,6 +231,8 @@ lints! {
         "A `var(Category)` whose category is the class's name, which `var()` uses already."),
     UnusedSuppression = ("R016", "unused-suppression", Redundancy, Warning, Always,
         "A lint in a `usagi: ignore[...]` comment that suppresses nothing."),
+    RedundantDefaultReturn = ("R017", "redundant-default-return", Redundancy, Warning, Sometimes,
+        "A function whose body only returns its return type's default value."),
 
     // Naming
     ConstNameCase = ("N001", "const-name-case", Naming, Warning, Never,
