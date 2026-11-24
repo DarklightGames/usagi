@@ -137,6 +137,14 @@ run-length encoded, at every bit depth the format defines, following
 the descriptor's origin. 8-bit greyscale is read as `L8` and the rest as
 `RGBA8`.
 
+Not done: importing 16-bit heightmaps, which terrains need. A terrain's
+heightmap is a `G16` texture, and UnrealEd's importer reads any 16-bit
+TGA (types 2 and 10) as `G16` greyscale, not as 5:5:5 colour as
+`TgaReader` does. Importing a heightmap needs a way to ask for that
+reading of a 16-bit TGA (an option, or a reader of its own), and `G16`
+from other formats too, such as 16-bit greyscale PNG, which `PngWriter`
+already writes.
+
 `Image::compress` makes DXT1, DXT3 and DXT5 images from `P8` and `RGBA8`
 ones, with box-filtered mipmaps down to 1×1, as `UTexture::Compress`
 asks NVIDIA's nvDXTlib for: DXT1 without alpha (`kDXT1`), allowing
