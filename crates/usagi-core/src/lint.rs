@@ -192,6 +192,8 @@ lints! {
         "A local or argument with the same name as a variable or const of the class."),
     MissingReturn = ("S016", "missing-return", Suspicious, Warning, Never,
         "A function with a return type where a path doesn't end in `return`."),
+    InvalidSuppression = ("S017", "invalid-suppression", Suspicious, Warning, Never,
+        "A `usagi:` suppression comment that is malformed or names no lint."),
     // Performance
     ActorIteratorInPerFrameFunction = ("P001", "actor-iterator-in-per-frame-function", Performance, Warning, Never,
         "`foreach AllActors`/`DynamicActors` in a function called every frame, such as `Tick`."),
@@ -227,6 +229,8 @@ lints! {
         "An empty `case` that falls through to `default`."),
     RedundantVarCategory = ("R015", "redundant-var-category", Redundancy, Warning, Always,
         "A `var(Category)` whose category is the class's name, which `var()` uses already."),
+    UnusedSuppression = ("R016", "unused-suppression", Redundancy, Warning, Always,
+        "A lint in a `usagi: ignore[...]` comment that suppresses nothing."),
 
     // Naming
     ConstNameCase = ("N001", "const-name-case", Naming, Warning, Never,
@@ -306,7 +310,7 @@ impl LintSelection {
     }
 }
 
-fn selector_matches(selector: &str, lint: Lint) -> bool {
+pub(crate) fn selector_matches(selector: &str, lint: Lint) -> bool {
     let selector = selector.trim();
     selector.eq_ignore_ascii_case("ALL")
         || (!selector.is_empty()

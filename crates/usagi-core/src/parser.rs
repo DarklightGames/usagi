@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 use crate::ast::*;
 use crate::lint::Lint;
+use crate::suppression::Suppressions;
 use crate::symbols::SymbolTable;
 use crate::visitor::{Visit, Visitor};
 pub use t3d::{ParseMode, ParseOptions};
@@ -1290,6 +1291,9 @@ pub struct ProgramResult {
     pub symbols: SymbolTable,
     /// The byte ranges of the comments, in order.
     pub comments: Vec<std::ops::Range<usize>>,
+    /// The `usagi: ignore[...]` comments, and which of them suppressed
+    /// something.
+    pub suppressions: Suppressions,
 }
 
 /// For a float literal with more than one decimal point (e.g. `0.0.5`),
@@ -1394,12 +1398,16 @@ pub fn parse_program_with(
     program.visit(&mut visitor);
     let mut errors = recovered;
     errors.extend(with_lines(visitor.errors));
+    let mut suppressions = Suppressions::parse(contents, &comments);
+    suppressions.retain(contents, &mut errors);
+    errors.extend(with_lines(suppressions.problems(contents)));
     errors.sort_by_key(|e| e.span.start);
     Ok(ProgramResult {
         program,
         errors,
         symbols,
         comments,
+        suppressions,
     })
 }
 
@@ -1457,12 +1465,10 @@ pub fn parse_bytes(
 /// does. `contents` is the source that `result` was parsed from.
 ///
 /// The parser doesn't know the file name, so this is a separate step from
-/// [`parse_program_with`]. Reports [`Lint::ClassNameMismatch`].
-pub fn check_file_name(
-    result: &ProgramResult,
-    contents: &str,
-    file_stem: &str,
-) -> Option<ProgramError> {
+/// [`parse_program_with`]. Adds a [`Lint::ClassNameMismatch`] problem to
+/// `result.errors`, unless a suppression comment suppresses it. Until this
+/// is called, a suppression of that lint is reported as unused.
+pub fn check_file_name(result: &mut ProgramResult, contents: &str, file_stem: &str) {
     let class = result
         .program
         .statements
@@ -1474,11 +1480,13 @@ pub fn check_file_name(
         .expect("the grammar requires a class declaration");
     let name = &class.name.data.string;
     if name.eq_ignore_ascii_case(file_stem) {
-        return None;
+        return;
     }
+    let lines = crate::source::LineIndex::new(contents);
     let mut span = class.name.span;
-    span.line = Some(crate::source::LineIndex::new(contents).line(span.start));
-    Some(ProgramError {
+    let line = lines.line(span.start);
+    span.line = Some(line);
+    let error = ProgramError {
         message: format!(
             "Class `{}` is in a file named `{}.uc`; UCC requires them to match",
             name, file_stem
@@ -1487,7 +1495,22 @@ pub fn check_file_name(
         severity: Lint::ClassNameMismatch.severity(),
         lint: Some(Lint::ClassNameMismatch),
         fix: None,
-    })
+    };
+    if result.suppressions.suppress(&error, line) {
+        // A selector that was unused may be used now.
+        result
+            .errors
+            .retain(|e| e.lint != Some(Lint::UnusedSuppression));
+        let mut problems = result.suppressions.problems(contents);
+        problems.retain(|e| e.lint == Some(Lint::UnusedSuppression));
+        for problem in &mut problems {
+            problem.span.line = Some(lines.line(problem.span.start));
+        }
+        result.errors.extend(problems);
+    } else {
+        result.errors.push(error);
+    }
+    result.errors.sort_by_key(|e| e.span.start);
 }
 
 /// Parses `contents` as one expression. The whole input must be the

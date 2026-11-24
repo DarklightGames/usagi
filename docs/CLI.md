@@ -53,6 +53,11 @@ A lint selector is `ALL`, a code (`S003`), a code prefix (`S`, `S00`), a
 lint name (`self-assignment`) or a category name (`suspicious`), all
 case-insensitive.
 
+A comment in the code can also suppress lints on one line
+(`// usagi: ignore[S003]`) or in its file (`// usagi: ignore-file[naming]`);
+see [STATIC_ANALYSIS.md](STATIC_ANALYSIS.md#suppression-comments). A
+suppressed problem isn't reported or fixed, whatever the selection.
+
 #### Fixes
 
 Problems that `--fix` can fix are marked `[*]` in the concise format, and

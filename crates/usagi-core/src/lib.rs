@@ -3,6 +3,7 @@ pub mod fix;
 pub mod lint;
 pub mod parser;
 pub mod source;
+pub mod suppression;
 pub mod symbols;
 pub mod visitor;
 
@@ -15,4 +16,5 @@ pub use parser::{
     parse_program_with, parse_with_rule,
 };
 pub use source::{Decoded, LineIndex, SourceEncoding, decode, decode_source, encode};
+pub use suppression::Suppressions;
 pub use symbols::{Reference, ReferenceKind, Symbol, SymbolKind, SymbolTable};

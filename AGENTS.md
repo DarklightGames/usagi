@@ -24,6 +24,7 @@ Paths below are relative to `crates/usagi-core`.
 | `src/symbols.rs` | The per-file symbol table: declarations, scopes and resolved references. |
 | `src/visitor.rs` | The lint checks. |
 | `src/lint.rs` | The lint registry (codes, names, categories, severities) and `LintSelection`. |
+| `src/suppression.rs` | Suppression comments (`// usagi: ignore[S008]`, `// usagi: ignore-file[...]`), applied in `parse_program_with`. |
 | `tests/` | Integration tests. `tests/lints.rs` covers the lints and `tests/symbols.rs` the symbol table. |
 
 `defaultproperties` blocks aren't parsed by the grammar. They are parsed by the

@@ -202,9 +202,13 @@ fn fix_bytes(path: &Path, bytes: &[u8], options: &CheckOptions) -> (Vec<u8>, usi
     let mut bytes = bytes.to_vec();
     let mut total = 0;
     for _ in 0..MAX_FIX_ROUNDS {
-        let Ok(parsed) = parse_bytes(&bytes, &ParseOptions { mode }) else {
+        let Ok(mut parsed) = parse_bytes(&bytes, &ParseOptions { mode }) else {
             break;
         };
+        // Otherwise a suppression of its lint would be removed as unused.
+        if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+            check_file_name(&mut parsed.result, &parsed.source.text, stem);
+        }
         let fixes = parsed.result.errors.iter().filter_map(|e| {
             let lint = e.lint?;
             let fix = e.fix.as_ref()?;
@@ -255,14 +259,13 @@ fn check_source(
     };
     match parse_bytes(bytes, &ParseOptions { mode }) {
         Ok(parsed) => {
-            let result = parsed.result;
+            let mut result = parsed.result;
             let mut problems = Vec::new();
             let mut outcome = Outcome::Ok;
-            let file_name = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| check_file_name(&result, &parsed.source.text, stem));
-            for error in result.errors.iter().chain(&file_name) {
+            if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+                check_file_name(&mut result, &parsed.source.text, stem);
+            }
+            for error in &result.errors {
                 match error.lint {
                     None => {
                         outcome = Outcome::Recovered;

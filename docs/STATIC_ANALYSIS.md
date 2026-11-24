@@ -45,6 +45,51 @@ usagi lint --format tsv --statistics <root> > lints.tsv
 
 `--statistics` prints the number of problems and files for each lint.
 
+## Suppression comments
+
+A comment that starts with `usagi:` suppresses lints in the code itself:
+
+```unrealscript
+A = A; // usagi: ignore[S003] the setter has side effects
+
+// usagi: ignore[switch-case-fallthrough, R001]
+case 1: X = 0;
+
+// usagi: ignore-file[naming]
+```
+
+- `usagi: ignore[...]` suppresses the listed lints on one line: the
+  comment's own line if code shares it, or the next line if the comment is
+  alone on its line. A block comment (`/* usagi: ignore[...] */`) works the
+  same way. A problem is on the line where it starts.
+- `usagi: ignore-file[...]` suppresses them in the whole file, wherever the
+  comment is.
+- Between the brackets is a comma-separated list of lint selectors, as for
+  `LintSelection` (`S003`, `S`, `self-assignment`, `suspicious`, `ALL`).
+  Anything after the `]` is ignored, so it can give the reason.
+
+The comment must start with `usagi:` (after the `//` or `/*` and any spaces),
+so `// see usagi: ignore[S003]` is an ordinary comment. Stacked comments
+don't combine: the line after `// usagi: ignore[S003]` is the next comment,
+so list every lint in one comment instead.
+
+Suppression happens in `parse_program_with`, before `LintSelection`, so a
+suppressed problem is not in `ProgramResult::errors` and its fix is never
+applied. Problems that aren't lints, and R016 and S017 themselves, can't be
+suppressed (use `ignore` or `[[lint.per-path]]` for those).
+
+A selector that suppresses nothing is reported as R016 `unused-suppression`,
+with a fix that removes it (or the whole comment, when none of its selectors
+suppress anything). A selector counts as used if it suppresses a problem of
+any lint, even one that `LintSelection` leaves out. A malformed comment
+(`usagi: ignore` without brackets, an unknown directive, a missing `]`, empty
+brackets) or a selector that matches no lint is reported as S017
+`invalid-suppression`, and suppresses nothing.
+
+C016 `class-name-mismatch` is checked by `check_file_name`, after parsing,
+which applies the suppressions too. Until it's called, a selector suppressing
+only C016 is reported as unused.
+
 ## Fixes
 
 Some problems come with a suggested fix (`ProgramError::fix`): a list of text
@@ -105,6 +150,7 @@ never applied from the command line; they are for an editor to offer.
 | S014 | `duplicate-replicated-member` | Warning |  | A member listed more than once in the replication block. |
 | S015 | `shadowed-variable` | Warning |  | A local or argument with the same name as a variable or const of the class (or state). In a `static` function only consts count, since instance variables aren't accessible there. Arguments of a function without a body, such as a delegate or native function, aren't checked. |
 | S016 | `missing-return` | Warning |  | A function with a return type where some path reaches the end without `return`; UCC returns zero or `None` there. Understands `if`/`else`, `switch` with `default` (including fallthrough into a case that returns) and `while (true)`/`for (;;)` loops without `break`. |
+| S017 | `invalid-suppression` | Warning |  | A `usagi:` comment that is malformed, such as `usagi: ignore` without brackets, or a selector in one that matches no lint (see [Suppression comments](#suppression-comments)). |
 
 ### Performance
 
@@ -131,6 +177,7 @@ never applied from the command line; they are for an editor to offer.
 | R013 | `redundant-return` | Warning | Sometimes | A bare `return;` as the last statement of a function. A body that is only `return;` is allowed, since it deliberately stubs out the parent's version. |
 | R014 | `redundant-case-before-default` | Warning | Sometimes | An empty `case` label directly before `default:`, which runs the same code without it. Labels whose value has side effects, such as a function call, are allowed. |
 | R015 | `redundant-var-category` | Warning | Yes | A `var(Category)` whose category is the class's name, e.g. `var(Foo)` in class `Foo`. `var()` already uses the class's name. |
+| R016 | `unused-suppression` | Warning | Yes | A lint selector in a `usagi: ignore[...]` or `usagi: ignore-file[...]` comment that suppresses nothing (see [Suppression comments](#suppression-comments)). The fix removes the selector, or the comment if none of its selectors suppress anything. |
 
 ### Naming
 

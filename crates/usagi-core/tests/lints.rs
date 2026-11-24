@@ -1526,13 +1526,241 @@ fn modifiers_are_access_then_alphabetical() {
 #[test]
 fn class_name_mismatch() {
     let source = "// A comment\nclass Foo extends Object;\n";
-    let result = parse_program(source).unwrap();
-    assert!(check_file_name(&result, source, "Foo").is_none());
+    let check = |stem: &str| {
+        let mut result = parse_program(source).unwrap();
+        check_file_name(&mut result, source, stem);
+        result.errors
+    };
+    assert!(check("Foo").is_empty());
     // Names are compared ignoring case.
-    assert!(check_file_name(&result, source, "foo").is_none());
-    let error = check_file_name(&result, source, "Bar").unwrap();
+    assert!(check("foo").is_empty());
+    let errors = check("Bar");
+    let [error] = errors.as_slice() else {
+        panic!("{:?}", errors)
+    };
     assert_eq!(error.lint, Some(Lint::ClassNameMismatch));
     assert_eq!(error.severity, ProgramErrorSeverity::Error);
     assert_eq!(&source[error.span.start..error.span.end], "Foo");
     assert_eq!(error.span.line, Some(2));
+}
+
+/// The codes reported for `source`, as in [`lints`], after checking that the
+/// class is in `Foo.uc`... or `stem`.
+fn lints_in_file(source: &str, stem: &str) -> Vec<&'static str> {
+    let mut result = parse_program(source).unwrap();
+    check_file_name(&mut result, source, stem);
+    result
+        .errors
+        .iter()
+        .filter_map(|e| e.lint.map(|l| l.code()))
+        .collect()
+}
+
+#[test]
+fn suppression_comments() {
+    // A trailing comment suppresses its own line.
+    assert_eq!(
+        lints(&function("", "A = A; // usagi: ignore[S003]")),
+        Vec::<&str>::new()
+    );
+    // A comment alone on its line suppresses the next one only.
+    assert_eq!(
+        lints(&function("", "// usagi: ignore[S003]\nA = A;\nZ = Z;")),
+        vec!["S003"]
+    );
+    assert_eq!(
+        lints(&function("", "    /* usagi: ignore[S003] */\nA = A;")),
+        Vec::<&str>::new()
+    );
+    // A block comment before code on its line suppresses that line, and
+    // every line of a comment that spans lines with code on them.
+    assert_eq!(
+        lints(&function("", "/* usagi: ignore[S003] */ A = A;")),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        lints(&function("", "Z = Z; /* usagi: ignore[S003]\n */ A = A;")),
+        Vec::<&str>::new()
+    );
+    // Any selector, case-insensitive, with a reason after the brackets.
+    for selector in [
+        "S003",
+        "s00",
+        "self-assignment",
+        "suspicious",
+        "ALL",
+        "R001, S003",
+    ] {
+        let body = format!("A = A; //usagi:ignore[{}] the engine needs this", selector);
+        assert_eq!(
+            only(&["S003"], &function("", &body)),
+            Vec::<&str>::new(),
+            "{}",
+            selector
+        );
+    }
+    // A selector that doesn't match the lint suppresses nothing.
+    assert_eq!(
+        lints(&function("", "A = A; // usagi: ignore[S002]")),
+        vec!["S003", "R016"]
+    );
+    // The whole file, from anywhere in it.
+    let source = function("", "A = A;\nZ = Z;\n// usagi: ignore-file[S003]");
+    assert_eq!(lints(&source), Vec::<&str>::new());
+    // Only comments that start with `usagi:` are directives.
+    assert_eq!(
+        lints(&function("", "A = A; // see usagi: ignore[S003]")),
+        vec!["S003"]
+    );
+    assert_eq!(
+        lints(&function("", "A = A; // usagi is great")),
+        vec!["S003"]
+    );
+    // Strings aren't comments.
+    assert_eq!(
+        only(
+            &["S003"],
+            &function("", "A = A; Log(\"// usagi: ignore[S003]\");")
+        ),
+        vec!["S003"]
+    );
+    // Problems that aren't lints can't be suppressed.
+    let result = parse_program(&function("", "A = 0.0.5; // usagi: ignore[ALL]")).unwrap();
+    assert!(
+        result.errors.iter().any(|e| e.lint.is_none()),
+        "{:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn unused_suppression() {
+    let body = |b: &str| function("", b);
+    assert_eq!(
+        lints(&body("A = A; // usagi: ignore[S003, R001]")),
+        vec!["R016"]
+    );
+    // On its own line, with nothing on the next.
+    assert_eq!(
+        lints(&body("// usagi: ignore[S003]\n\nA = A;")),
+        vec!["R016", "S003"]
+    );
+    assert_eq!(lints(&body("// usagi: ignore-file[R001]")), vec!["R016"]);
+    // Suppressing a lint that the selection leaves out still counts.
+    let mut result = parse_program(&body("A = A; // usagi: ignore[S003]")).unwrap();
+    LintSelection::new(["R"], []).retain(&mut result.errors);
+    assert!(result.errors.is_empty());
+    // The lints about suppressions can't be suppressed.
+    assert_eq!(
+        lints(&body(
+            "// usagi: ignore-file[R016, S017]\nA = A; // usagi: ignore[S002, S999]"
+        )),
+        vec!["R016", "R016", "S003", "R016", "S017"]
+    );
+    // The span is the selector, on the comment's line.
+    let source = body("A = A; // usagi: ignore[S003, R001]");
+    let result = parse_program(&source).unwrap();
+    let e = &result.errors[0];
+    assert_eq!(&source[e.span.start..e.span.end], "R001");
+    assert_eq!(e.span.line, Some(9));
+    assert_eq!(e.message, "`R001` suppresses nothing here");
+    let result = parse_program(&body("// usagi: ignore-file[R001]")).unwrap();
+    assert_eq!(
+        result.errors[0].message,
+        "`R001` suppresses nothing in this file"
+    );
+
+    // Fixes remove the selector, or the comment if nothing in it is used.
+    assert_fix(
+        "R016",
+        &body("A = A; // usagi: ignore[S003, R001]"),
+        &body("A = A; // usagi: ignore[S003]"),
+    );
+    assert_fix(
+        "R016",
+        &body("A = A; // usagi: ignore[R001,S003] why"),
+        &body("A = A; // usagi: ignore[S003] why"),
+    );
+    assert_fix(
+        "R016",
+        &body("A = 1;\t// usagi: ignore[S003]"),
+        &body("A = 1;"),
+    );
+    assert_fix(
+        "R016",
+        &body("A = 1;\n    // usagi: ignore[S003]\nZ = 1;"),
+        &body("A = 1;\nZ = 1;"),
+    );
+    assert_fix(
+        "R016",
+        &body("/* usagi: ignore[S003] */  A = 1;"),
+        &body("A = 1;"),
+    );
+    assert_fix(
+        "R016",
+        &body("A = 1; // usagi: ignore[S003, S999]"),
+        &body("A = 1;"),
+    );
+}
+
+#[test]
+fn unused_suppression_of_class_name_mismatch() {
+    // Used only once the file name is checked.
+    let source = "class Foo extends Object; // usagi: ignore[C016, R001]\n";
+    assert_eq!(lints(source), vec!["R016", "R016"]);
+    assert_eq!(lints_in_file(source, "Bar"), vec!["R016"]);
+    assert_eq!(lints_in_file(source, "Foo"), vec!["R016", "R016"]);
+    let mut result = parse_program(source).unwrap();
+    check_file_name(&mut result, source, "Bar");
+    assert_eq!(result.errors[0].span.line, Some(1));
+    let source = "// usagi: ignore[C016]\nclass Foo extends Object;\n";
+    assert_eq!(lints_in_file(source, "Bar"), Vec::<&str>::new());
+}
+
+#[test]
+fn invalid_suppression() {
+    let messages = |comment: &str| {
+        let source = function("", &format!("A = A; {}", comment));
+        let result = parse_program(&source).unwrap();
+        result
+            .errors
+            .iter()
+            .filter(|e| e.lint == Some(Lint::InvalidSuppression))
+            .map(|e| {
+                (
+                    source[e.span.start..e.span.end].to_string(),
+                    e.message.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        messages("// usagi: ignore"),
+        [(
+            "// usagi: ignore".to_string(),
+            "`usagi: ignore` needs the lints to ignore in brackets, e.g. `usagi: ignore[S008]`"
+                .to_string()
+        )]
+    );
+    assert_eq!(
+        messages("// usagi: skip[S003]")[0].1,
+        "Unknown directive `usagi: skip`; expected `usagi: ignore[...]` or `usagi: ignore-file[...]`"
+    );
+    assert_eq!(
+        messages("/* usagi: ignore-file[S003 */")[0].1,
+        "`usagi: ignore-file[` has no closing `]`"
+    );
+    assert_eq!(
+        messages("// usagi: ignore[ , ]")[0].1,
+        "`usagi: ignore[]` names no lints"
+    );
+    assert_eq!(
+        messages("// usagi: ignore[S003, S999]"),
+        [("S999".to_string(), "No lint matches `S999`".to_string())]
+    );
+    // An invalid comment suppresses nothing.
+    assert_eq!(
+        lints(&function("", "A = A; // usagi: ignore S003")),
+        vec!["S003", "S017"]
+    );
 }

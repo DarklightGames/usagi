@@ -380,6 +380,22 @@ fn fix_respects_the_selection() {
 }
 
 #[test]
+fn suppression_comments() {
+    // The class is in the wrong file, which only the CLI knows.
+    let source = "class Foo extends Object; // usagi: ignore[C016]\n\
+                  function F(int A)\n{\n    A = A; // usagi: ignore[S003, S002]\n}\n";
+    let dir = project(&[("Bar.uc", source)]);
+    let out = concise(dir.path(), &[]);
+    assert!(out.contains("R016"), "{}", out);
+    assert!(!out.contains("S003") && !out.contains("C016"), "{}", out);
+    // --fix removes the unused selector, and keeps the one only the file
+    // name check uses.
+    usagi(dir.path()).args(["lint", "--fix"]).assert().code(0);
+    let fixed = fs::read_to_string(dir.path().join("Bar.uc")).unwrap();
+    assert_eq!(fixed, source.replace("[S003, S002]", "[S003]"));
+}
+
+#[test]
 fn fix_keeps_utf16() {
     let dir = project(&[]);
     let source = "class Foo extends Object;\nfunction F() { G(True); }\n";
