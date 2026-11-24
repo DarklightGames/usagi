@@ -22,8 +22,8 @@ pub enum Category {
     Redundancy,
     /// Naming conventions.
     Naming,
-    /// Formatting and ordering conventions.
-    Formatting,
+    /// How code is documented.
+    Documentation,
 }
 
 impl Category {
@@ -33,7 +33,7 @@ impl Category {
         Category::Performance,
         Category::Redundancy,
         Category::Naming,
-        Category::Formatting,
+        Category::Documentation,
     ];
 
     /// The letter that starts the code of every lint in this category.
@@ -44,7 +44,7 @@ impl Category {
             Category::Performance => "P",
             Category::Redundancy => "R",
             Category::Naming => "N",
-            Category::Formatting => "F",
+            Category::Documentation => "D",
         }
     }
 
@@ -55,7 +55,7 @@ impl Category {
             Category::Performance => "performance",
             Category::Redundancy => "redundancy",
             Category::Naming => "naming",
-            Category::Formatting => "formatting",
+            Category::Documentation => "documentation",
         }
     }
 }
@@ -248,13 +248,12 @@ lints! {
     IdentifierCaseMismatch = ("N006", "identifier-case-mismatch", Naming, Warning, Sometimes,
         "A name written with different capitalization than its declaration."),
 
-    // Formatting
-    BooleanLiteralCase = ("F001", "boolean-literal-case", Formatting, Warning, Always,
-        "A boolean literal that isn't lowercase."),
-    ObjectLiteralKeywordCase = ("F002", "object-literal-keyword-case", Formatting, Warning, Always,
-        "A `class'...'` or `enum'...'` keyword that isn't written `Class` or `Enum`."),
-    UnsortedModifiers = ("F003", "unsorted-modifiers", Formatting, Warning, Sometimes,
-        "Modifiers that aren't the access modifier followed by the others in alphabetical order."),
+    // Documentation
+    ContinuedTrailingComment = ("D001", "continued-trailing-comment", Documentation, Warning, Never,
+        "An end-of-line comment continued on the lines below it."),
+
+    // The formatting lints, F001-F003, were removed: `usagi format` does what
+    // they did. Their codes aren't reused.
 }
 
 impl fmt::Display for Lint {
@@ -355,12 +354,12 @@ mod tests {
         assert!(!s.is_enabled(Lint::SwitchCaseFallthrough));
         assert!(!s.is_enabled(Lint::EmptyStatement));
 
-        let s = LintSelection::new(["ALL"], ["naming", "unsorted-modifiers"]);
+        let s = LintSelection::new(["ALL"], ["naming", "self-assignment"]);
         assert!(!s.is_enabled(Lint::BoolNamePrefix));
-        assert!(!s.is_enabled(Lint::UnsortedModifiers));
-        assert!(s.is_enabled(Lint::BooleanLiteralCase));
+        assert!(!s.is_enabled(Lint::SelfAssignment));
+        assert!(s.is_enabled(Lint::EmptyStatement));
 
-        assert!(LintSelection::default().is_enabled(Lint::UnsortedModifiers));
+        assert!(LintSelection::default().is_enabled(Lint::SelfAssignment));
         assert!(LintSelection::is_valid_selector("s00"));
         assert!(!LintSelection::is_valid_selector("Z"));
     }

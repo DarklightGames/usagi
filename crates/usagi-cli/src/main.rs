@@ -5,6 +5,7 @@ mod check;
 mod cli;
 mod config;
 mod discover;
+mod format;
 mod output;
 mod pkg;
 
@@ -135,7 +136,32 @@ fn run(cli: Cli) -> Result<bool, String> {
                         .any(|p| matches!(p.kind, check::Kind::Lint(_)))
             }))
         }
-        Command::Format(_) => Err("format is not implemented yet".to_string()),
+        Command::Format(args) => {
+            let config = load()?;
+            let options = config::format_options(&config).map_err(|ConfigError(e)| e)?;
+            if args.paths.len() == 1 && args.paths[0].as_os_str() == "-" {
+                return format::stdin(&options);
+            }
+            let files = FileArgs {
+                paths: args.paths.clone(),
+                include: args.include.clone(),
+                exclude: args.exclude.clone(),
+                strict: false,
+                no_strict: false,
+            };
+            let settings = settings(&config, &files, cli.jobs, Overrides::default(), &cwd)?;
+            let default = [PathBuf::from(".")];
+            let paths = if files.paths.is_empty() {
+                &default[..]
+            } else {
+                &files.paths[..]
+            };
+            let (found, errors) = discover::files(paths, &settings);
+            if let Some(error) = errors.first() {
+                return Err(error.clone());
+            }
+            format::files(&found, &options, args.check, settings.jobs, &cwd)
+        }
         Command::Pkg(args) => match &args.command {
             PkgCommand::List(args) => {
                 pkg::list(args, color, &mut io::stdout().lock())?;

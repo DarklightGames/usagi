@@ -215,6 +215,47 @@ pub fn comment_ranges(text: &str) -> Vec<Range<usize>> {
     comments
 }
 
+/// For each of `comments` (from [`comment_ranges`]), whether it continues
+/// an end-of-line comment: a `//` comment alone on its line, directly below
+/// an end-of-line `//` comment (or another continuation) and starting in the
+/// same column, as in
+///
+/// ```text
+/// var int A; // The quick brown fox
+///            // jumps over the lazy dog.
+/// ```
+///
+/// Columns count a tab as reaching the next multiple of 4.
+pub fn comment_continuations(text: &str, comments: &[Range<usize>]) -> Vec<bool> {
+    let mut continues = vec![false; comments.len()];
+    for i in 1..comments.len() {
+        let (above, below) = (&comments[i - 1], &comments[i]);
+        let between = &text[above.end..below.start];
+        let line_start = |offset: usize| text[..offset].rfind('\n').map_or(0, |n| n + 1);
+        let after_code = !text[line_start(above.start)..above.start].trim().is_empty();
+        continues[i] = text[above.clone()].starts_with("//")
+            && text[below.clone()].starts_with("//")
+            && between.trim().is_empty()
+            && between.matches('\n').count() == 1
+            && (after_code || continues[i - 1])
+            && column(&text[line_start(above.start)..above.start])
+                == column(&text[line_start(below.start)..below.start]);
+    }
+    continues
+}
+
+/// The column at the end of `line`, counting a tab as reaching the next
+/// multiple of 4.
+fn column(line: &str) -> usize {
+    line.chars().fold(0, |column, c| {
+        if c == '\t' {
+            column / 4 * 4 + 4
+        } else {
+            column + 1
+        }
+    })
+}
+
 /// The offset of the next `\n` at or after `from`, or the end of `bytes`.
 fn memchr_newline(bytes: &[u8], from: usize) -> usize {
     bytes[from..]

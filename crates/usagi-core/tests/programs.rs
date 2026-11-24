@@ -107,6 +107,13 @@ fn exec_directive_before_class() {
 }
 
 #[test]
+fn exec_directive_at_end_of_file() {
+    // XGame_rc/Classes/DominationPoint_rc.uc ends with one, with no newline.
+    assert_parses("class Foo extends Object;\n#exec OBJ LOAD FILE=Foo.utx");
+    assert_parses("class Foo extends Object;\nfunction F() {}\n#exec OBJ LOAD FILE=Foo.utx");
+}
+
+#[test]
 fn var_modifier_editinlineuse() {
     assert_parses(
         "class Foo extends Object;\nvar() editinlineuse Material M;\nvar() editinlinenotify Object N;\n",
@@ -468,6 +475,25 @@ fn operator_precedence() {
             Expression::DyadicExpression { verb: v, .. } => assert_eq!(*v, verb, "{}", source),
             other => panic!("{}: {:?}", source, other),
         }
+    }
+}
+
+#[test]
+fn prefix_and_postfix_operators_together() {
+    use usagi_core::ast::{Expression, MonadicVerb};
+    // `!A++` is `!(A++)`. Both operators are kept.
+    match &expression("!A++").data {
+        Expression::MonadicPreExpression { operand, verb } => {
+            assert_eq!(*verb, MonadicVerb::Not);
+            assert!(matches!(
+                operand.data,
+                Expression::MonadicPostExpression {
+                    verb: MonadicVerb::Increment,
+                    ..
+                }
+            ));
+        }
+        other => panic!("{:?}", other),
     }
 }
 

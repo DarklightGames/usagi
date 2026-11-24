@@ -12,7 +12,7 @@ static analysis on it, building mods with UCC, and reading package files:
 | `crates/usagi-core` | The library (`usagi_core`): parser, AST, symbol table and lints. |
 | `crates/usagi-pkg` | The package reader (`usagi_pkg`). See [Packages](#packages). |
 | `crates/usagi-io` | Exporting package data to file formats (`usagi_io`): asset models, adapters from `usagi-pkg`'s types, and writers. See [Exporting](#exporting). |
-| `crates/usagi-cli` | The `usagi` binary: `parse`, `lint` (and `lint rule`), `build` (in `src/build/`), `pkg` (in `src/pkg/`; `pkg obj` in `obj.rs`, `pkg export` in `export.rs`, `pkg diff` in `diff.rs`, and finding a game's `Paths` in `game.rs`) and configuration files. Its tests are in `tests/cli.rs`. |
+| `crates/usagi-cli` | The `usagi` binary: `parse`, `lint` (and `lint rule`), `format` (in `src/format.rs`), `build` (in `src/build/`), `pkg` (in `src/pkg/`; `pkg obj` in `obj.rs`, `pkg export` in `export.rs`, `pkg diff` in `diff.rs`, and finding a game's `Paths` in `game.rs`) and configuration files. Its tests are in `tests/cli.rs`. |
 
 Paths below are relative to `crates/usagi-core`.
 
@@ -25,7 +25,8 @@ Paths below are relative to `crates/usagi-core`.
 | `src/visitor.rs` | The lint checks. |
 | `src/lint.rs` | The lint registry (codes, names, categories, severities) and `LintSelection`. |
 | `src/suppression.rs` | Suppression comments (`// usagi: ignore[S008]`, `// usagi: ignore-file[...]`), applied in `parse_program_with`. |
-| `tests/` | Integration tests. `tests/lints.rs` covers the lints and `tests/symbols.rs` the symbol table. |
+| `src/format/` | The formatter (see [`docs/FORMATTING.md`](docs/FORMATTING.md)). `printer.rs` prints a program in the house style, breaking lines that are too long and placing comments by their positions; `normalize.rs` undoes the changes formatting may make, so `format::equivalent` can check that a formatted file is the same program. |
+| `tests/` | Integration tests. `tests/lints.rs` covers the lints, `tests/symbols.rs` the symbol table, and `tests/formatter.rs` and `tests/format.rs` the formatter's output and its safety check. |
 
 `defaultproperties` blocks aren't parsed by the grammar. They are parsed by the
 `t3d` crate (on crates.io).
@@ -176,6 +177,17 @@ coverage (`cargo llvm-cov --summary-only -p usagi-io`).
 | `src/image.rs` | `Image`, from a `Texture` (and its `Palette`), compressing it to DXT (`Image::compress`), `PngWriter`, `TgaWriter` and `DdsWriter`, and `TgaReader`. |
 | `src/dxt.rs` | Decoding and encoding DXT1, DXT3 and DXT5 blocks. |
 
+## Formatting
+
+**Keep [`docs/FORMATTING.md`](docs/FORMATTING.md) up to date.** It lists every
+formatting rule, and the formatter follows it. Formatting must never change
+what the code means: `format_text` checks every result with
+`format::equivalent`, and anything the formatter may change has to be undone
+by `format/normalize.rs`. A formatting rule has a test in
+`tests/formatter.rs`, and `src/format/` keeps 100% coverage. Check changes on
+the corpus: every file should format, the output should be the same program,
+and formatting it again should change nothing.
+
 ## Static analysis
 
 **Keep [`docs/STATIC_ANALYSIS.md`](docs/STATIC_ANALYSIS.md) up to date.** It lists every
@@ -189,7 +201,7 @@ To add a lint:
 
 1. Add it to the `lints!` table in `src/lint.rs` with the next free code in
    its category (`C` correctness, `S` suspicious, `P` performance,
-   `R` redundancy, `N` naming, `F` formatting), a kebab-case name, a severity
+   `R` redundancy, `N` naming, `D` documentation), a kebab-case name, a severity
    whether its problems have a fix (`Always`, `Sometimes` or `Never`) and a
    one-line summary. Codes are stable, so never reuse or renumber one.
 2. Report it from `src/visitor.rs` with `visitor.report(Lint::..., message, span)`,

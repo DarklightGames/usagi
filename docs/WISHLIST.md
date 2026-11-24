@@ -37,7 +37,6 @@ Ideas that aren't implemented yet. For the lints that exist, see
 ## CLI
 
 * Inline suppression comments, e.g. `// usagi: ignore[S008]`.
-* `usagi format`.
 * Unsafe fixes for an editor to offer.
 * SARIF output, for GitHub code scanning.
 

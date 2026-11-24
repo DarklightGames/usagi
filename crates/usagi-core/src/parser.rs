@@ -70,7 +70,7 @@ macro_rules! match_nodes_any {
 // TODO: precedence relies on the TYPE also!
 // TODO: all of these should be read from Object.uc before proper parsing, so
 // that we don't need to have this table at all.
-fn precedence(verb: &DyadicVerb) -> u8 {
+pub(crate) fn precedence(verb: &DyadicVerb) -> u8 {
     match verb {
         DyadicVerb::Exponentiate => 12,
         DyadicVerb::Multiply | DyadicVerb::Divide | DyadicVerb::Dot | DyadicVerb::Cross => 16,
@@ -271,22 +271,24 @@ fn parse_expression_from_nodes(nodes: &[Node]) -> Result<Box<AstNode<Expression>
             },
         }));
     }
-    // Next, search for monadic verbs at the beginning and end of the expression
+    // Next, search for monadic verbs at the beginning and end of the
+    // expression. A postfix operator binds more tightly than a prefix one:
+    // `!A++` is `!(A++)`.
+    if let Rule::monadic_pre_verb = nodes.first().unwrap().as_rule() {
+        return Ok(Box::new(AstNode {
+            span: AstSpan::from(nodes),
+            data: Expression::MonadicPreExpression {
+                verb: MonadicVerb::from_str(nodes.first().unwrap().as_str()).unwrap(),
+                operand: parse_expression_from_nodes(&nodes[1..])?,
+            },
+        }));
+    }
     if let Rule::monadic_post_verb = nodes.last().unwrap().as_rule() {
         return Ok(Box::new(AstNode {
             span: AstSpan::from(nodes),
             data: Expression::MonadicPostExpression {
                 verb: MonadicVerb::from_str(nodes.last().unwrap().as_str()).unwrap(),
                 operand: parse_target(&nodes[..nodes.len() - 1])?,
-            },
-        }));
-    }
-    if let Rule::monadic_pre_verb = nodes.first().unwrap().as_rule() {
-        return Ok(Box::new(AstNode {
-            span: AstSpan::from(nodes),
-            data: Expression::MonadicPreExpression {
-                verb: MonadicVerb::from_str(nodes.first().unwrap().as_str()).unwrap(),
-                operand: parse_target(&nodes[1..])?,
             },
         }));
     }
@@ -436,7 +438,9 @@ impl UnrealScriptParser {
 
     fn compiler_directive(input: Node) -> Result<CompilerDirective> {
         match_nodes!(input.into_children();
-            [compiler_directive_inner(command)] => Ok(CompilerDirective { command })
+            [compiler_directive_inner(command)] => Ok(CompilerDirective { command }),
+            // The last line of the file, with no newline after it.
+            [compiler_directive_inner(command), EOI(_e)] => Ok(CompilerDirective { command })
         )
     }
 
@@ -903,9 +907,10 @@ impl UnrealScriptParser {
     }
 
     fn goto_statement(input: Node) -> Result<CodeStatement> {
+        let quoted = input.as_str().contains('\'');
         match_nodes!(input.into_children();
             [unqualified_identifier(label)] => {
-                Ok(CodeStatement::Goto(label))
+                Ok(CodeStatement::Goto { label, quoted })
             }
         )
     }
@@ -1127,6 +1132,10 @@ impl UnrealScriptParser {
             .expect("defaultproperties always has a body");
         let closed = children.next().is_some();
         let offset = body.as_span().start();
+        let body_text = AstNode {
+            span: AstSpan::from(&body),
+            data: body.as_str().to_string(),
+        };
         // The block's contents are parsed permissively; whether recovered
         // problems are errors is decided by `parse_program_with`.
         let parsed = t3d::parse_properties(body.as_str(), &t3d::ParseOptions::default())
@@ -1144,6 +1153,7 @@ impl UnrealScriptParser {
         Ok(AstNode {
             span,
             data: DefaultProperties {
+                body: body_text,
                 statements,
                 diagnostics,
                 closed,
@@ -1396,6 +1406,7 @@ pub fn parse_program_with(
     let comments = crate::source::comment_ranges(contents);
     let mut visitor = Visitor::new(contents, &symbols, &comments);
     program.visit(&mut visitor);
+    visitor.check_comments();
     let mut errors = recovered;
     errors.extend(with_lines(visitor.errors));
     let mut suppressions = Suppressions::parse(contents, &comments);

@@ -20,7 +20,7 @@ A lint code is its category's letter followed by three digits.
 | `P` | performance | Code that is needlessly slow. |
 | `R` | redundancy | Code that does nothing and can be removed. |
 | `N` | naming | Naming conventions. |
-| `F` | formatting | Formatting and ordering conventions. |
+| `D` | documentation | How code is documented. |
 
 ## Choosing lints
 
@@ -191,13 +191,18 @@ never applied from the command line; they are for an editor to offer.
 | N005 | `object-literal-type-case` | Warning |  | An object literal type that doesn't begin with a capital letter, e.g. `texture'Foo'`. |
 | N006 | `identifier-case-mismatch` | Warning | Sometimes | A name written with different capitalization than its declaration in the same file. |
 
-### Formatting
+### Documentation
 
 | Code | Name | Severity | Fix | Reports |
 |---|---|---|---|---|
-| F001 | `boolean-literal-case` | Warning | Yes | A boolean literal that isn't lowercase. |
-| F002 | `object-literal-keyword-case` | Warning | Yes | A `class'...'` or `enum'...'` keyword that isn't written `Class` or `Enum`, e.g. `class'Foo'` or `ENUM'Bar'`. |
-| F003 | `unsorted-modifiers` | Warning | Sometimes | Variable or function modifiers that aren't the access modifier (`private`, `protected` or `public`) followed by the others in alphabetical order. |
+| D001 | `continued-trailing-comment` | Warning |  | An end-of-line `//` comment continued by `//` comments on the lines below it, lined up in the same column (a tab reaches the next multiple of 4 columns), e.g. `var int A; // The quick brown fox` followed by `           // jumps over the lazy dog.` Document a declaration with comments above it instead. One problem covers the comment and its continuations. `usagi format` keeps the continuations lined up under the comment (see [FORMATTING.md](FORMATTING.md#comments)). |
+
+### Formatting
+
+There are no formatting lints: `usagi format` formats code (see
+[FORMATTING.md](FORMATTING.md)). The formatting lints that came before it,
+F001 `boolean-literal-case`, F002 `object-literal-keyword-case` and F003
+`unsorted-modifiers`, were removed, and their codes aren't reused.
 
 ## Problems that aren't lints
 

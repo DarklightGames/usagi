@@ -178,7 +178,7 @@ pub enum FunctionTypeType {
     PreOperator,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FunctionType {
     pub type_: FunctionTypeType,
     pub arguments: Option<Vec<AstNode<NumericLiteral>>>,
@@ -285,12 +285,12 @@ impl DyadicVerb {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Program {
     pub statements: Vec<AstNode<ProgramStatement>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ProgramStatement {
     Empty,
     ClassDeclaration(AstNode<ClassDeclaration>),
@@ -308,7 +308,15 @@ pub enum ProgramStatement {
 
 #[derive(Debug)]
 pub struct CompilerDirective {
+    /// The text after `#` up to the end of the line, as written.
     pub command: String,
+}
+
+/// Directives are equal if they differ only in trailing whitespace.
+impl PartialEq for CompilerDirective {
+    fn eq(&self, other: &Self) -> bool {
+        self.command.trim_end() == other.command.trim_end()
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -340,7 +348,7 @@ pub struct StructDeclaration {
     pub cpp: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct VarDeclaration {
     /// The `(...)` after `var`, with its span (parentheses included).
     pub category: Option<AstNode<String>>,
@@ -446,14 +454,20 @@ pub enum Expression {
     ParentheticalExpression(Box<AstNode<Expression>>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum CodeStatement {
     Empty,
     Expression(Box<AstNode<Expression>>),
     Return(Option<Box<AstNode<Expression>>>),
     Break,
     Continue,
-    Goto(AstNode<Identifier>),
+    /// `goto Label;` or `goto 'Label';`. In state code, `goto` takes a name
+    /// expression, so the two differ there: the unquoted label is read as a
+    /// variable.
+    Goto {
+        label: AstNode<Identifier>,
+        quoted: bool,
+    },
     JumpLabel(AstNode<Identifier>),
     ForEach(Box<ForEach>),
     For(Box<ForStatement>),
@@ -465,7 +479,7 @@ pub enum CodeStatement {
     ConstDeclaration(AstNode<ConstDeclaration>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ClassDeclaration {
     pub name: AstNode<Identifier>,
     pub parent_class: Option<AstNode<Identifier>>,
@@ -533,20 +547,20 @@ impl PartialEq for Identifier {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FunctionArgument {
     pub modifiers: Vec<FunctionArgumentModifier>,
     pub type_: Type,
     pub name: AstNode<VarName>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FunctionModifier {
     pub type_: FunctionModifierType,
     pub arguments: Vec<AstNode<NumericLiteral>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FunctionDeclaration {
     pub types: Vec<FunctionType>,
     pub modifiers: Vec<AstNode<FunctionModifier>>,
@@ -556,13 +570,13 @@ pub struct FunctionDeclaration {
     pub body: Option<AstNode<FunctionBody>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ClassModifier {
     pub type_: AstNode<ClassModifierType>,
     pub arguments: Option<AstNode<ExpressionList>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct LocalDeclaration {
     pub type_: Type,
     pub names: Vec<AstNode<VarName>>,
@@ -574,19 +588,19 @@ pub struct EnumDeclaration {
     pub values: Vec<AstNode<Identifier>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum StateStatement {
     ConstDeclaration(AstNode<ConstDeclaration>),
     FunctionDeclaration(AstNode<FunctionDeclaration>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct StateLabel {
     pub label: AstNode<Identifier>,
     pub statements: Vec<AstNode<CodeStatement>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct StateDeclaration {
     pub is_editable: bool,
     pub modifiers: Vec<StateModifier>,
@@ -597,48 +611,48 @@ pub struct StateDeclaration {
     pub labels: Vec<StateLabel>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ReplicationStatement {
     pub reliability: ReplicationReliability,
     pub condition: Box<AstNode<Expression>>,
     pub variables: Vec<AstNode<Identifier>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ReplicationBlock {
     pub statements: Vec<ReplicationStatement>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum FunctionBodyStatement {
     ConstDeclaration(AstNode<ConstDeclaration>),
     LocalDeclaration(AstNode<LocalDeclaration>),
     CodeStatement(AstNode<CodeStatement>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct FunctionBody {
     pub statements: Vec<FunctionBodyStatement>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ConstDeclaration {
     pub name: AstNode<Identifier>,
     pub value: AstNode<Literal>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct CodeBlock {
     pub statements: Vec<AstNode<CodeStatement>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum CodeStatementOrBlock {
     CodeBlock(AstNode<CodeBlock>),
     CodeStatement(AstNode<CodeStatement>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ForStatement {
     pub init: Option<Box<AstNode<Expression>>>,
     pub predicate: Option<Box<AstNode<Expression>>>,
@@ -646,25 +660,25 @@ pub struct ForStatement {
     pub body: AstNode<CodeStatementOrBlock>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct DoUntil {
     pub body: AstNode<CodeStatementOrBlock>,
     pub predicate: Option<Box<AstNode<Expression>>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct WhileStatement {
     pub predicate: Box<AstNode<Expression>>,
     pub body: AstNode<CodeStatementOrBlock>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ForEach {
     pub predicate: Box<AstNode<Expression>>,
     pub body: AstNode<CodeStatementOrBlock>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SwitchCaseType {
     Expression(Box<AstNode<Expression>>),
     Default,
@@ -678,32 +692,39 @@ pub struct SwitchCase {
     pub statements: Vec<AstNode<CodeStatement>>,
 }
 
-#[derive(Debug)]
+/// Cases are equal if they differ only in where they are.
+impl PartialEq for SwitchCase {
+    fn eq(&self, other: &Self) -> bool {
+        self.type_ == other.type_ && self.statements == other.statements
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub struct SwitchStatement {
     pub predicate: Box<AstNode<Expression>>,
     pub cases: Vec<SwitchCase>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ConditionalStatement {
     pub if_statement: IfStatement,
     pub elif_statements: Vec<ElifStatement>,
     pub else_statement: Option<ElseStatement>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct IfStatement {
     pub predicate: Box<AstNode<Expression>>,
     pub body: Option<AstNode<CodeStatementOrBlock>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ElifStatement {
     pub predicate: Box<AstNode<Expression>>,
     pub body: AstNode<CodeStatementOrBlock>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ElseStatement {
     pub body: AstNode<CodeStatementOrBlock>,
 }
@@ -713,10 +734,26 @@ pub struct ElseStatement {
 /// are byte offsets into the whole source file.
 #[derive(Debug)]
 pub struct DefaultProperties {
+    /// The text between the braces (to the end of the file if the block isn't
+    /// closed), with its span.
+    pub body: AstNode<String>,
     pub statements: Vec<t3d::syntax::Statement>,
     /// Problems in the block that were recovered from (discarded lines,
     /// ignored trailing text, unbalanced `Begin`/`End Object`).
     pub diagnostics: Vec<t3d::Diagnostic>,
     /// `false` if the block has no closing `}` before the end of the file.
     pub closed: bool,
+}
+
+/// Blocks are equal if their text is, apart from whitespace at the ends of
+/// lines and of the block: the statements are parsed from it, and their spans
+/// depend on where the block is. Whether the block is closed doesn't matter:
+/// UE2 reads an unclosed one to the end of the file.
+impl PartialEq for DefaultProperties {
+    fn eq(&self, other: &Self) -> bool {
+        fn text(body: &str) -> Vec<&str> {
+            body.trim_end().lines().map(str::trim_end).collect()
+        }
+        text(&self.body.data) == text(&other.body.data)
+    }
 }

@@ -45,7 +45,11 @@ fn exit_codes() {
         .code(2)
         .stderr(predicate::str::contains("unknown lint \"nonsense\""));
     usagi(dir.path()).args(["lint", "--bogus"]).assert().code(2);
-    usagi(dir.path()).args(["format"]).assert().code(2);
+    // Foo.uc isn't formatted.
+    usagi(dir.path())
+        .args(["format", "--check"])
+        .assert()
+        .code(1);
 }
 
 #[test]
@@ -314,8 +318,8 @@ fn utf8_source() {
         .code(1);
 }
 
-const FIXABLE: &[u8] = b"class Foo extends Actor;\r\nvar int I;\r\nfunction F(int A)\r\n{\r\n    // caf\xE9\r\n    Self.I = int(True);\r\n    A = A;\r\n    return;\r\n}\r\n";
-const FIXED: &[u8] = b"class Foo extends Actor;\r\nvar int I;\r\nfunction F(int A)\r\n{\r\n    // caf\xE9\r\n    I = int(true);\r\n    A = A;\r\n}\r\n";
+const FIXABLE: &[u8] = b"class Foo extends Actor;\r\nvar int I;\r\nfunction F(int A)\r\n{\r\n    // caf\xE9\r\n    Self.I = Max(1, );\r\n    A = A;\r\n    return;\r\n}\r\n";
+const FIXED: &[u8] = b"class Foo extends Actor;\r\nvar int I;\r\nfunction F(int A)\r\n{\r\n    // caf\xE9\r\n    I = Max(1);\r\n    A = A;\r\n}\r\n";
 
 fn fixable_project() -> TempDir {
     let dir = project(&[]);
@@ -356,8 +360,8 @@ fn diff_changes_nothing() {
         .assert()
         .code(1)
         .stdout(predicate::str::contains("--- a/Foo.uc"))
-        .stdout(predicate::str::contains("-    Self.I = int(True);"))
-        .stdout(predicate::str::contains("+    I = int(true);"))
+        .stdout(predicate::str::contains("-    Self.I = Max(1, );"))
+        .stdout(predicate::str::contains("+    I = Max(1);"))
         .stderr(predicate::str::contains("Would fix 3 problems in 1 file"));
     assert_eq!(fs::read(dir.path().join("Foo.uc")).unwrap(), FIXABLE);
     // Nothing to fix.
@@ -397,12 +401,12 @@ fn fix_writes_files_in_their_encoding() {
 fn fix_respects_the_selection() {
     let dir = fixable_project();
     usagi(dir.path())
-        .args(["lint", "--fix", "--select", "F001"])
+        .args(["lint", "--fix", "--select", "R008"])
         .assert()
         .code(0);
     let fixed = fs::read(dir.path().join("Foo.uc")).unwrap();
     let fixed = String::from_utf8_lossy(&fixed);
-    assert!(fixed.contains("Self.I = int(true);"), "{}", fixed);
+    assert!(fixed.contains("Self.I = Max(1);"), "{}", fixed);
     assert!(fixed.contains("return;"), "{}", fixed);
 }
 
@@ -425,26 +429,171 @@ fn suppression_comments() {
 #[test]
 fn fix_keeps_utf16() {
     let dir = project(&[]);
-    let source = "class Foo extends Object;\nfunction F() { G(True); }\n";
+    let source = "class Foo extends Object;\nfunction F() { G(A,); }\n";
     let utf16: Vec<u8> = [0xFF, 0xFE]
         .into_iter()
         .chain(source.encode_utf16().flat_map(u16::to_le_bytes))
         .collect();
     fs::write(dir.path().join("Foo.uc"), utf16).unwrap();
     usagi(dir.path())
-        .args(["lint", "--fix", "--select", "F001"])
+        .args(["lint", "--fix", "--select", "R008"])
         .assert()
         .code(0);
     let expected: Vec<u8> = [0xFF, 0xFE]
         .into_iter()
         .chain(
             source
-                .replace("True", "true")
+                .replace("G(A,)", "G(A)")
                 .encode_utf16()
                 .flat_map(u16::to_le_bytes),
         )
         .collect();
     assert_eq!(fs::read(dir.path().join("Foo.uc")).unwrap(), expected);
+}
+
+const UNFORMATTED: &[u8] =
+    b"class Foo extends Object;\r\nfunction F() { if (A) B(); } // caf\xE9\r\n";
+const FORMATTED: &[u8] = b"class Foo extends Object;\r\n\r\nfunction F()\r\n{\r\n    if (A)\r\n    {\r\n        B();\r\n    }\r\n} // caf\xE9\r\n";
+
+#[test]
+fn format_writes_files_in_their_encoding() {
+    let dir = project(&[("Bar.uc", "class Bar extends Object;\n")]);
+    fs::write(dir.path().join("Foo.uc"), UNFORMATTED).unwrap();
+    usagi(dir.path())
+        .args(["format"])
+        .assert()
+        .code(0)
+        .stdout("")
+        .stderr("1 file reformatted, 1 left unchanged\n");
+    assert_eq!(fs::read(dir.path().join("Foo.uc")).unwrap(), FORMATTED);
+    usagi(dir.path())
+        .args(["format"])
+        .assert()
+        .code(0)
+        .stderr("0 files reformatted, 2 left unchanged\n");
+}
+
+#[test]
+fn format_check_writes_nothing() {
+    let dir = project(&[("Bar.uc", "class Bar extends Object;\n")]);
+    fs::write(dir.path().join("Foo.uc"), UNFORMATTED).unwrap();
+    usagi(dir.path())
+        .args(["format", "--check"])
+        .assert()
+        .code(1)
+        .stdout("Would reformat: Foo.uc\n")
+        .stderr("1 file would be reformatted, 1 already formatted\n");
+    assert_eq!(fs::read(dir.path().join("Foo.uc")).unwrap(), UNFORMATTED);
+    usagi(dir.path())
+        .args(["format", "--check", "Bar.uc"])
+        .assert()
+        .code(0)
+        .stdout("");
+    usagi(dir.path())
+        .args(["format", "--check", "--exclude", "Foo.uc"])
+        .assert()
+        .code(0);
+    usagi(dir.path())
+        .args(["format", "Missing"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn format_reports_files_it_cant_format() {
+    let dir = project(&[
+        ("Broken.uc", "class Broken extends\n"),
+        (
+            "Comment.uc",
+            "class Comment extends Object;\nvar config /* X */ int Y;\n",
+        ),
+        ("Foo.uc", "class Foo extends Object;\nvar int X;\n"),
+    ]);
+    // They're reported, but don't fail the run.
+    usagi(dir.path())
+        .args(["format"])
+        .assert()
+        .code(0)
+        .stderr(predicate::str::contains(
+            "Broken.uc:2:1: the file doesn't parse: ",
+        ))
+        .stderr(predicate::str::contains(
+            "Comment.uc:2:12: a comment here can't be placed\n",
+        ))
+        .stderr(predicate::str::contains(
+            "1 file reformatted, 0 left unchanged, 2 couldn't be formatted\n",
+        ));
+    usagi(dir.path())
+        .args(["format", "--check"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "usagi: 2 files couldn't be formatted",
+        ));
+}
+
+#[test]
+fn format_stdin() {
+    let dir = project(&[]);
+    usagi(dir.path())
+        .args(["format", "-"])
+        .write_stdin("class Foo extends Object;\nvar   int X;")
+        .assert()
+        .code(0)
+        .stdout("class Foo extends Object;\n\nvar int X;\n");
+    usagi(dir.path())
+        .args(["format", "-"])
+        .write_stdin("class Foo extends Object;\n")
+        .assert()
+        .code(0)
+        .stdout("class Foo extends Object;\n");
+    usagi(dir.path())
+        .args(["format", "-"])
+        .write_stdin("class Foo extends Object;\nvar config /* X */ int Y;\n")
+        .assert()
+        .code(2)
+        .stderr("usagi: <stdin>:2:12: a comment here can't be placed\n");
+}
+
+#[test]
+fn format_config() {
+    let source = "class Foo extends Object;\nfunction F() { G(Argument1, Argument2); }\n";
+    let dir = project(&[
+        (
+            "usagi.toml",
+            "[format]\nline-width = 25\nindent-style = \"tabs\"\n",
+        ),
+        ("Foo.uc", source),
+    ]);
+    usagi(dir.path()).args(["format"]).assert().code(0);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("Foo.uc")).unwrap(),
+        "class Foo extends Object;\n\nfunction F()\n{\n\tG(\n\t\tArgument1,\n\t\tArgument2\n\t\t);\n}\n"
+    );
+    fs::write(
+        dir.path().join("usagi.toml"),
+        "[format]\nindent-width = 2\n",
+    )
+    .unwrap();
+    usagi(dir.path()).args(["format"]).assert().code(0);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("Foo.uc")).unwrap(),
+        "class Foo extends Object;\n\nfunction F()\n{\n  G(Argument1, Argument2);\n}\n"
+    );
+    fs::write(
+        dir.path().join("usagi.toml"),
+        "[format]\nindent-style = \"tabs\"\nindent-width = 2\n",
+    )
+    .unwrap();
+    usagi(dir.path())
+        .args(["format"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "format.indent-width doesn't apply to format.indent-style = \"tabs\"",
+        ));
+    fs::write(dir.path().join("usagi.toml"), "[format]\nline-width = 0\n").unwrap();
+    usagi(dir.path()).args(["format"]).assert().code(2);
 }
 
 /// A fake UCC, run by `sh` in place of Wine. `make` logs a heading for each

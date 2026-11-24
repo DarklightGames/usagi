@@ -24,7 +24,56 @@ pub struct ConfigFile {
     #[serde(default)]
     pub lint: LintConfig,
     #[serde(default)]
+    pub format: FormatConfig,
+    #[serde(default)]
     pub build: BuildConfig,
+}
+
+/// Settings for `usagi format`. A mod's configuration file overrides each
+/// one it sets.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct FormatConfig {
+    /// The longest a line may be. Default: 120.
+    pub line_width: Option<std::num::NonZeroUsize>,
+    /// `spaces` (the default) or `tabs`.
+    pub indent_style: Option<IndentStyle>,
+    /// How many spaces one level of indentation is. Default: 4.
+    pub indent_width: Option<std::num::NonZeroU8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IndentStyle {
+    Spaces,
+    Tabs,
+}
+
+/// The formatter's settings, from the `[format]` table.
+pub fn format_options(
+    config: &LoadedConfig,
+) -> Result<usagi_core::format::FormatOptions, ConfigError> {
+    use usagi_core::format::{FormatOptions, Indent};
+    let format = &config.file.format;
+    let defaults = FormatOptions::default();
+    if format.indent_style == Some(IndentStyle::Tabs) && format.indent_width.is_some() {
+        let path = config
+            .path
+            .as_deref()
+            .map_or_else(|| "usagi.toml".to_string(), |p| p.display().to_string());
+        return Err(ConfigError(format!(
+            "{path}: format.indent-width doesn't apply to format.indent-style = \"tabs\""
+        )));
+    }
+    Ok(FormatOptions {
+        indent: match format.indent_style {
+            Some(IndentStyle::Tabs) => Indent::Tabs,
+            _ => format
+                .indent_width
+                .map_or(defaults.indent, |n| Indent::Spaces(n.get().into())),
+        },
+        line_width: format.line_width.map_or(defaults.line_width, |n| n.get()),
+    })
 }
 
 /// Settings for `usagi build`. `mod`, `root` and `ini` are read from the
@@ -140,6 +189,11 @@ pub fn merge_mod(
             extend_select: concat(root.lint.extend_select, modded.lint.extend_select),
             ignore: concat(root.lint.ignore, modded.lint.ignore),
             per_path,
+        },
+        format: FormatConfig {
+            line_width: modded.format.line_width.or(root.format.line_width),
+            indent_style: modded.format.indent_style.or(root.format.indent_style),
+            indent_width: modded.format.indent_width.or(root.format.indent_width),
         },
         build: BuildConfig {
             mod_name: Some(mod_name.to_string()),

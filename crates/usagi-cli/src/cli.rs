@@ -38,7 +38,7 @@ pub enum Command {
     Parse(ParseArgs),
     /// Parse files and report lint problems.
     Lint(LintArgs),
-    /// Format files (not implemented yet).
+    /// Format files in place, in the house style.
     Format(FormatArgs),
     /// Compile a mod's out-of-date packages with UCC.
     Build(BuildArgs),
@@ -554,7 +554,22 @@ pub struct RuleArgs {
 
 #[derive(Debug, Args)]
 pub struct FormatArgs {
+    /// Files or directories to format. Directories are searched for `.uc`
+    /// files. Defaults to the current directory. `-` formats standard input
+    /// to standard output.
     pub paths: Vec<PathBuf>,
+
+    /// Write nothing; list the files that would change.
+    #[arg(long)]
+    pub check: bool,
+
+    /// Only format files matching these globs (replaces the configured list).
+    #[arg(long, value_name = "GLOB", value_delimiter = ',')]
+    pub include: Vec<String>,
+
+    /// Skip files matching these globs (replaces the configured list).
+    #[arg(long, value_name = "GLOB", value_delimiter = ',')]
+    pub exclude: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

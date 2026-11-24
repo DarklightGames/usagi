@@ -371,6 +371,46 @@ fn operator_names_are_not_function_names() {
     assert_eq!(lints(source), vec!["N002"]);
 }
 
+// Documentation
+
+#[test]
+fn continued_trailing_comments() {
+    // One problem for the comment and the lines that continue it.
+    let source = "class Foo extends Object;\n\
+                  var int A;  // one\n\
+                  \x20           // two\n\
+                  \x20           // three\n\
+                  var int B; // four\n\
+                  \t\t   // five\n";
+    let result = parse_program(source).unwrap();
+    let spans: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.lint == Some(Lint::ContinuedTrailingComment))
+        .map(|e| &source[e.span.start..e.span.end])
+        .collect();
+    assert_eq!(
+        spans,
+        vec![
+            "// one\n            // two\n            // three",
+            "// four\n\t\t   // five"
+        ]
+    );
+    // Comments on their own lines, in another column, after a blank line or
+    // after a block comment aren't continuations.
+    let source = "class Foo extends Object;\n\
+                  // one\n\
+                  // two\n\
+                  var int A; // three\n\
+                  \x20             // four\n\
+                  var int B; // five\n\
+                  \n\
+                  \x20          // six\n\
+                  var int C; /* seven */\n\
+                  \x20          // eight\n";
+    assert!(!lints(source).contains(&"D001"));
+}
+
 // Unused locals
 
 /// Returns the lints reported for the locals declared by `locals` and used by
@@ -700,7 +740,7 @@ fn every_lint_is_documented() {
             continue;
         };
         let is_code = code.len() == 4
-            && code.starts_with(['C', 'S', 'P', 'R', 'N', 'F'])
+            && code.starts_with(['C', 'S', 'P', 'R', 'N', 'D', 'F'])
             && code[1..].chars().all(|c| c.is_ascii_digit());
         if is_code {
             assert!(
@@ -715,18 +755,14 @@ fn every_lint_is_documented() {
 #[test]
 fn const_values_and_class_modifier_arguments_are_visited() {
     assert_eq!(
-        only(&["F001"], "class Foo extends Object;\nconst B = True;\n"),
-        vec!["F001"]
-    );
-    assert_eq!(
         only(
             &["S012"],
             "class Foo extends Object;\nconst R = rot(0, 1.5, 0);\n"
         ),
         vec!["S012"]
     );
-    let source = "class Foo extends Object;\nfunction F() { const B = TRUE; }\n";
-    assert_eq!(only(&["F001"], source), vec!["F001"]);
+    let source = "class Foo extends Object;\nfunction F() { const R = rot(0, 1.5, 0); }\n";
+    assert_eq!(only(&["S012"], source), vec!["S012"]);
     assert_eq!(
         only(&["R008"], "class Foo extends Object\n    config(User,);\n"),
         vec!["R008"]
@@ -772,16 +808,9 @@ fn const_name_case() {
 
 #[test]
 fn object_literal_case() {
+    // `class` and `enum` are keywords, whose case is the formatter's.
     assert_eq!(
-        only(&["F002"], &function("", "G(class'Actor');")),
-        vec!["F002"]
-    );
-    assert_eq!(
-        only(&["F002"], &function("", "G(CLASS'Actor'); G(enum'EFoo');")),
-        vec!["F002", "F002"]
-    );
-    assert_eq!(
-        only(&["F002"], &function("", "G(Class'Actor'); G(Enum'EFoo');")),
+        only(&["N005"], &function("", "G(class'Actor'); G(enum'EFoo');")),
         Vec::<&str>::new()
     );
     assert_eq!(
@@ -1347,11 +1376,6 @@ fn fixes() {
         "class Foo extends Object;\nvar() config int A;\nvar() int B;\nvar(Bar) int C;\n",
     );
     assert_fix(
-        "F003",
-        "class Foo extends Object;\nvar config /* c */ private int A;\nstatic final private function F();\n",
-        "class Foo extends Object;\nvar private /* c */ config int A;\nprivate final static function F();\n",
-    );
-    assert_fix(
         "N006",
         &class_with("    i = a;\n    Self.i = A;\n"),
         &class_with("    I = A;\n    Self.I = A;\n"),
@@ -1375,16 +1399,6 @@ fn fixes() {
         "R008",
         &class_with("    F(A, , );\n    F(,);\n    G(A,B,);\n"),
         &class_with("    F(A);\n    F();\n    G(A,B);\n"),
-    );
-    assert_fix(
-        "F001",
-        &class_with("    A = int(True) + int(FALSE);\n"),
-        &class_with("    A = int(true) + int(false);\n"),
-    );
-    assert_fix(
-        "F002",
-        &class_with("    A = G(class'Foo', ENUM'EBar');\n"),
-        &class_with("    A = G(Class'Foo', Enum'EBar');\n"),
     );
 }
 
@@ -1511,16 +1525,6 @@ fn redundancy_problems_without_a_fix() {
     assert!(fix_of("R005", source).is_none());
     let source = "class Foo extends Actor;\nreplication\n{\n    /* none */\n}\n";
     assert!(fix_of("R006", source).is_none());
-}
-
-#[test]
-fn modifiers_are_access_then_alphabetical() {
-    let ok = "class Foo extends Object;\nvar private config int A;\nvar const transient int B;\n\
-              private final simulated function F();\nfinal static function G();\n";
-    assert_eq!(only(&["F003"], ok), Vec::<&str>::new());
-    let bad = "class Foo extends Object;\nvar config private int A;\nvar transient const int B;\n\
-               final private function F();\nstatic final function G();\n";
-    assert_eq!(only(&["F003"], bad), vec!["F003"; 4]);
 }
 
 #[test]

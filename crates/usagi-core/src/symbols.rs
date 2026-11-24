@@ -949,7 +949,7 @@ impl Resolver<'_> {
                     self.expression(e)
                 }
             }
-            CodeStatement::Goto(label) => {
+            CodeStatement::Goto { label, .. } => {
                 self.refer_here(&[Namespace::Label], label, ReferenceKind::Name)
             }
             CodeStatement::ForEach(f) => {

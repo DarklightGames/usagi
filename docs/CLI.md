@@ -6,6 +6,7 @@ UCC, and inspects package files. It is built from the `usagi-cli` crate.
 ```sh
 cargo install usagi-cli                  # or download a binary from the Releases page
 usagi lint                               # lint every .uc file under the current directory
+usagi format                             # format every .uc file under the current directory
 usagi build                              # compile the mod's out-of-date packages
 usagi pkg list System/Engine.u --all     # show a package's summary, imports and exports
 usagi pkg obj Textures/UI.utx "Texture'UI.HUD.*'" --property Format,LODSet
@@ -24,7 +25,7 @@ usagi pkg obj Textures/UI.utx "Texture'UI.HUD.*'" --property Format,LODSet
 | [`pkg obj`](#usagi-pkg-obj-path-objects) | Show objects' properties, as T3D or as a table. |
 | [`pkg export`](#usagi-pkg-export-paths---output-dir) | Write objects' native data and properties to files. |
 | [`pkg diff`](#usagi-pkg-diff-rev-rev----path) | Compare two versions of a package, in git revisions or files. |
-| [`format`](#usagi-format) | Not implemented yet. |
+| [`format`](#usagi-format-paths) | Format files in place, or check that they're formatted. |
 
 Every command that takes paths accepts files and directories. Directories are
 searched for `.uc` files (in any letter case). With no paths, the current
@@ -64,7 +65,7 @@ Problems that `--fix` can fix are marked `[*]` in the concise format, and
 have a "fixable with --fix" note in the full format. Only *safe* fixes, which
 never change what the code does, are applied; see
 [STATIC_ANALYSIS.md](STATIC_ANALYSIS.md#fixes) for which lints have them. Only
-selected lints are fixed, so `usagi lint --fix --select F001` fixes nothing
+selected lints are fixed, so `usagi lint --fix --select R008` fixes nothing
 else.
 
 `--fix` re-lints each fixed file and fixes again, up to 10 times, so that
@@ -91,9 +92,28 @@ Parses each file and reports syntax errors and recovered problems.
 | `--statistics` | Print how many files had each outcome: `ok`, `recovered`, `strict_error`, `syntax_error`, `panic` or `io_error`. |
 | `--format`, `--include`, `--exclude` | As for `lint`. |
 
-### `usagi format`
+### `usagi format [PATHS]...`
 
-Not implemented yet.
+Formats each file in place, in the house style that
+[FORMATTING.md](FORMATTING.md) describes. Files are written back in the
+encoding they were read in, with their line endings (a file with any CRLF
+gets CRLF throughout). A file that's already formatted isn't written.
+
+| Flag | Meaning |
+|---|---|
+| `--check` | Write nothing. Print `Would reformat: <path>` for each file that would change. |
+| `--include`, `--exclude` | As for `lint`. |
+
+`-` as the only path formats standard input and prints the result, for
+editors that format on save.
+
+A file that can't be formatted is reported on standard error as
+`path:line:column: message`, and left as it is. That's a file that doesn't
+parse, or one with a comment where the formatter can't place it (see
+[FORMATTING.md](FORMATTING.md#comments)). Finally, a summary goes to standard
+error: `2 files reformatted, 40 left unchanged`, or with `--check`, `2 files
+would be reformatted, 40 already formatted`, followed by `, 1 couldn't be
+formatted` if any couldn't.
 
 ### `usagi build`
 
@@ -1151,8 +1171,9 @@ Besides lint codes, a problem's code can be `parse` (a recovered problem),
 | 0 | Nothing to report. Recovered problems alone don't count, unless `--strict` is used. |
 | 1 | `lint`: a lint problem, or a file that failed to parse; with `--fix`, a problem left after fixing; with `--diff`, a change to show. `parse`: a file that failed to parse. |
 | 1 | `build`: a package failed to compile, or a source file failed to parse. |
+| 1 | `format --check`: a file would change. |
 | 1 | `pkg obj`, `pkg export`, `pkg diff`: an object whose data is malformed. `pkg diff --exit-code`: the packages differ. |
-| 2 | A usage error, a configuration error or a missing path. `pkg list`, `pkg flags`, `pkg obj`, `pkg export`, `pkg diff`: a file that can't be read or isn't a valid package; `pkg flags`: an official package without `--force`; `pkg obj`, `pkg export`: an object that isn't in the package (for `pkg export`, in any of them) or isn't of the class given, or an invalid object reference; `pkg export`: the same package given twice, or files that can't be written. `pkg diff`: an argument that's neither a file nor a git revision, more than two revisions, a path outside the repository or not in a revision, a package that isn't stored locally (offline, an object in Git LFS that isn't in the cache, or a Git LFS pointer in the working tree), an object without wildcards that's in neither package, or `git` failing to read a file. `build`: a setup problem, such as a missing folder, or a locked package that would have to be rebuilt. |
+| 2 | A usage error, a configuration error or a missing path. `pkg list`, `pkg flags`, `pkg obj`, `pkg export`, `pkg diff`: a file that can't be read or isn't a valid package; `pkg flags`: an official package without `--force`; `pkg obj`, `pkg export`: an object that isn't in the package (for `pkg export`, in any of them) or isn't of the class given, or an invalid object reference; `pkg export`: the same package given twice, or files that can't be written. `pkg diff`: an argument that's neither a file nor a git revision, more than two revisions, a path outside the repository or not in a revision, a package that isn't stored locally (offline, an object in Git LFS that isn't in the cache, or a Git LFS pointer in the working tree), an object without wildcards that's in neither package, or `git` failing to read a file. `build`: a setup problem, such as a missing folder, or a locked package that would have to be rebuilt. `format --check`: a file that couldn't be formatted (without `--check`, such a file is reported, but doesn't fail the run); `format -`: standard input couldn't be formatted. |
 
 ## Configuration
 
@@ -1174,7 +1195,7 @@ jobs = 6
 [lint]
 select = ["ALL"]          # default: ALL
 extend-select = []
-ignore = ["F003", "naming"]
+ignore = ["N006", "naming"]
 
 # Lint settings for some files. Every matching entry applies, in order, so a
 # later entry wins over an earlier one.
@@ -1185,6 +1206,12 @@ ignore = ["ALL"]
 [[lint.per-path]]
 paths = ["UnrealGame/Classes/MyClass.uc"]
 extend-select = ["C"]
+
+# Settings for `usagi format`.
+[format]
+line-width = 120          # the longest a line may be. Default: 120
+indent-style = "spaces"   # spaces or tabs. Default: spaces
+indent-width = 4          # spaces per level of indentation (not with tabs). Default: 4
 
 # Settings for `usagi build`.
 [build]
@@ -1230,7 +1257,7 @@ include = ["MyMod_*"]
 strict = false
 
 [lint]
-ignore = ["F003"]
+ignore = ["N006"]
 
 [build]
 version = "1.2.3-beta"    # MAJOR.MINOR.PATCH[-PRERELEASE]
@@ -1247,7 +1274,7 @@ The game directory's file then needs only:
 mod = "MyMod"
 ```
 
-`include`, `exclude`, `strict`, `jobs`, `lint.select`, `build.wine` and
+`include`, `exclude`, `strict`, `jobs`, `lint.select`, the `format` settings, `build.wine` and
 `build.progress` in the mod's file replace the game directory's; `lint.extend-select`, `lint.ignore`,
 `lint.per-path` and `build.locked` are added to them. Globs in both files are
 relative to the game directory. When building a mod, `version` and

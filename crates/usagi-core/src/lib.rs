@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod fix;
+pub mod format;
 pub mod lint;
 pub mod parser;
 pub mod source;

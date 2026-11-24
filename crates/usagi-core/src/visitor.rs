@@ -90,6 +90,33 @@ impl<'a> Visitor<'a> {
         }
     }
 
+    /// Checks the file's comments: reports each end-of-line comment that's
+    /// continued on the lines below it, as one problem spanning the comment
+    /// and its continuations.
+    pub fn check_comments(&mut self) {
+        let continues = crate::source::comment_continuations(self.contents, self.comments);
+        let mut i = 0;
+        while i < self.comments.len() {
+            let mut last = i;
+            while continues.get(last + 1) == Some(&true) {
+                last += 1;
+            }
+            if last > i {
+                let span = AstSpan {
+                    start: self.comments[i].start,
+                    end: self.comments[last].end,
+                    line: None,
+                };
+                self.report(
+                    Lint::ContinuedTrailingComment,
+                    "an end-of-line comment continued on the lines below it; move it above the code it describes",
+                    span,
+                );
+            }
+            i = last + 1;
+        }
+    }
+
     /// Reports a problem found by `lint`.
     pub fn report(&mut self, lint: Lint, message: impl Into<String>, span: AstSpan) {
         // A lint whose problems always have a fix must use report_with_fix.
@@ -354,7 +381,7 @@ fn is_jump(statement: &CodeStatement) -> bool {
         CodeStatement::Return(_)
             | CodeStatement::Break
             | CodeStatement::Continue
-            | CodeStatement::Goto(_)
+            | CodeStatement::Goto { .. }
     ) || is_stop(statement)
 }
 
@@ -491,25 +518,7 @@ impl Visit for AstNode<Literal> {
         match &self.data {
             Literal::None => {}
             Literal::Numeric(_) => {}
-            Literal::Boolean(_) => {
-                let contents = &visitor.contents[self.span.start..self.span.end];
-                let lower = contents.to_lowercase();
-                if contents != lower {
-                    let fix = Fix::safe(
-                        format!("Replace with `{}`", lower),
-                        vec![Edit::replace(self.span.start..self.span.end, lower.clone())],
-                    );
-                    visitor.report_with_fix(
-                        Lint::BooleanLiteralCase,
-                        format!(
-                            "Boolean literals should be lowercase (use {:?} instead of {:?})",
-                            lower, contents
-                        ),
-                        self.span,
-                        fix,
-                    )
-                }
-            }
+            Literal::Boolean(_) => {}
             Literal::String(_) => {}
             Literal::Name(_) => {}
             Literal::Rotator(values) => {
@@ -545,29 +554,8 @@ impl Visit for AstNode<Literal> {
             }
             Literal::Vector(_) => {}
             Literal::Object { type_, .. } => match type_.to_lowercase().as_str() {
-                "class" | "enum" => {
-                    let lower = type_.to_lowercase();
-                    let expected = format!("{}{}", lower[..1].to_uppercase(), &lower[1..]);
-                    if expected != type_.as_str() {
-                        let fix = Fix::safe(
-                            format!("Replace with `{}`", expected),
-                            vec![Edit::replace(
-                                type_.span.start..type_.span.end,
-                                expected.clone(),
-                            )],
-                        );
-                        visitor.report_with_fix(
-                            Lint::ObjectLiteralKeywordCase,
-                            format!(
-                                "Type specifier for class and enum object literals should be capitalized (e.g., {} instead of {})",
-                                expected,
-                                type_.as_str()
-                            ),
-                            type_.span,
-                            fix,
-                        )
-                    }
-                }
+                // Their case is the formatter's (R47).
+                "class" | "enum" => {}
                 _ => {
                     // TODO: the correct thing to do here is check that the capitalization matches the capitalization the type was defined with
                     if type_.chars().next().is_some_and(|c| !c.is_uppercase()) {
@@ -1499,7 +1487,7 @@ impl Visit for AstNode<CodeStatement> {
                     )
                 }
             }
-            CodeStatement::Goto(_) => {}
+            CodeStatement::Goto { .. } => {}
             CodeStatement::JumpLabel(_) => {}
             CodeStatement::ForEach(f) => f.visit(visitor),
             CodeStatement::For(f) => f.visit(visitor),
@@ -1579,50 +1567,6 @@ fn check_duplicate_modifiers(
 }
 
 /// Reports more than one access modifier among `names`.
-/// Reports modifiers that aren't in the expected order: the access modifier
-/// (`private`, `protected` or `public`) first, then the rest alphabetically.
-/// `modifiers` are each modifier's name and span. The fix swaps the
-/// modifiers' text into place, so comments between them stay where they are.
-fn check_modifier_order(
-    modifiers: &[(String, AstSpan)],
-    what: &str,
-    span: AstSpan,
-    visitor: &mut Visitor,
-) {
-    let mut sorted: Vec<&(String, AstSpan)> = modifiers.iter().collect();
-    sorted.sort_by_key(|(n, _)| {
-        let n = n.to_ascii_lowercase();
-        (!matches!(n.as_str(), "private" | "protected" | "public"), n)
-    });
-    if modifiers.iter().zip(&sorted).all(|(a, b)| a.0 == b.0) {
-        return;
-    }
-    let names: Vec<&str> = sorted.iter().map(|(n, _)| n.as_str()).collect();
-    let texts: Option<Vec<&str>> = sorted
-        .iter()
-        .map(|(_, s)| visitor.contents.get(s.start..s.end))
-        .collect();
-    let fix = texts.map(|texts| {
-        let edits = modifiers
-            .iter()
-            .zip(texts)
-            .filter(|((_, s), text)| visitor.contents.get(s.start..s.end) != Some(*text))
-            .map(|((_, s), text)| Edit::replace(s.start..s.end, text.to_string()))
-            .collect();
-        Fix::safe(format!("Reorder as `{}`", names.join(" ")), edits)
-    });
-    visitor.report_with_optional_fix(
-        Lint::UnsortedModifiers,
-        format!(
-            "{} modifiers should be the access modifier, then the others in alphabetical order ({:?})",
-            what,
-            names.join(" ")
-        ),
-        span,
-        fix,
-    )
-}
-
 fn check_access_modifiers(names: &[String], span: AstSpan, visitor: &mut Visitor) {
     let mut access: Vec<&str> = names
         .iter()
@@ -1676,7 +1620,6 @@ impl Visit for AstNode<FunctionDeclaration> {
             )
         }
 
-        check_redundant_default_return(self, visitor);
         check_duplicate_modifiers(
             self.modifiers
                 .iter()
@@ -1688,13 +1631,6 @@ impl Visit for AstNode<FunctionDeclaration> {
         let modifier_names: Vec<String> =
             self.modifiers.iter().map(|m| m.type_.to_string()).collect();
         check_access_modifiers(&modifier_names, self.span, visitor);
-
-        let modifiers: Vec<(String, AstSpan)> = self
-            .modifiers
-            .iter()
-            .map(|m| (m.type_.to_string(), m.span))
-            .collect();
-        check_modifier_order(&modifiers, "Function", self.span, visitor);
 
         // ensure that functions with exec modifier does not consecutive float arguments
         if self
@@ -1728,6 +1664,70 @@ impl Visit for AstNode<FunctionDeclaration> {
             returns_value: Some(self.return_type.is_some()),
             ..CodeContext::default()
         };
+        visitor.with_code_context(context, |visitor| {
+            for argument in &self.arguments {
+                argument.type_.visit(visitor);
+            }
+            if let Some(body) = &self.body {
+                body.visit(visitor)
+            }
+            visitor.report_unused_locals(scope);
+        });
+        if let (None, Some(body)) = (&self.return_type, &self.body) {
+            check_redundant_return(body, visitor);
+        }
+        check_redundant_default_return(self, visitor);
+        if let (Some(_), Some(body)) = (&self.return_type, &self.body) {
+            let statements: Vec<_> = body
+                .statements
+                .iter()
+                .filter_map(|s| match s {
+                    FunctionBodyStatement::CodeStatement(c) => Some(c),
+                    _ => None,
+                })
+                .collect();
+            if !always_returns(&statements) {
+                visitor.report(
+                    Lint::MissingReturn,
+                    format!(
+                        "{} returns a value, but not every path through it ends in `return`",
+                        self.name.string
+                    ),
+                    self.name.span,
+                )
+            }
+        }
+    }
+}
+
+/// Reports empty `case` labels directly before `default:`, which run the same
+/// code as `default` would. UE2 tests cases in order, so only labels before
+/// `default` (with nothing but other empty labels between) are redundant, and
+/// only when testing their value has no side effects.
+fn check_redundant_cases_before_default(cases: &[SwitchCase], visitor: &mut Visitor) {
+    let Some(default) = cases
+        .iter()
+        .position(|c| matches!(c.type_, SwitchCaseType::Default))
+    else {
+        return;
+    };
+    let labels = cases[..default].iter().rev().map_while(|c| match &c.type_ {
+        SwitchCaseType::Expression(e) if c.statements.is_empty() && !has_side_effects(e) => {
+            Some(c.label_span)
+        }
+        _ => None,
+    });
+    for label_span in labels.collect::<Vec<_>>() {
+        let fix = visitor.deletion("Remove the `case` label", label_span);
+        visitor.report_with_optional_fix(
+            Lint::RedundantCaseBeforeDefault,
+            "`case` falls through to `default`, which runs the same code",
+            label_span,
+            fix,
+        )
+    }
+}
+
 /// Reports a function whose body is nothing but `return` of its return
 /// type's default value (`0`, `False`, `""`, `''`, `None`, `vect(0,0,0)`,
 /// `rot(0,0,0)`), which is what a function without a body returns.
@@ -1813,69 +1813,6 @@ fn is_default_value(type_: &Type, literal: &Literal) -> bool {
     }
 }
 
-        visitor.with_code_context(context, |visitor| {
-            for argument in &self.arguments {
-                argument.type_.visit(visitor);
-            }
-            if let Some(body) = &self.body {
-                body.visit(visitor)
-            }
-            visitor.report_unused_locals(scope);
-        });
-        if let (None, Some(body)) = (&self.return_type, &self.body) {
-            check_redundant_return(body, visitor);
-        }
-        if let (Some(_), Some(body)) = (&self.return_type, &self.body) {
-            let statements: Vec<_> = body
-                .statements
-                .iter()
-                .filter_map(|s| match s {
-                    FunctionBodyStatement::CodeStatement(c) => Some(c),
-                    _ => None,
-                })
-                .collect();
-            if !always_returns(&statements) {
-                visitor.report(
-                    Lint::MissingReturn,
-                    format!(
-                        "{} returns a value, but not every path through it ends in `return`",
-                        self.name.string
-                    ),
-                    self.name.span,
-                )
-            }
-        }
-    }
-}
-
-/// Reports empty `case` labels directly before `default:`, which run the same
-/// code as `default` would. UE2 tests cases in order, so only labels before
-/// `default` (with nothing but other empty labels between) are redundant, and
-/// only when testing their value has no side effects.
-fn check_redundant_cases_before_default(cases: &[SwitchCase], visitor: &mut Visitor) {
-    let Some(default) = cases
-        .iter()
-        .position(|c| matches!(c.type_, SwitchCaseType::Default))
-    else {
-        return;
-    };
-    let labels = cases[..default].iter().rev().map_while(|c| match &c.type_ {
-        SwitchCaseType::Expression(e) if c.statements.is_empty() && !has_side_effects(e) => {
-            Some(c.label_span)
-        }
-        _ => None,
-    });
-    for label_span in labels.collect::<Vec<_>>() {
-        let fix = visitor.deletion("Remove the `case` label", label_span);
-        visitor.report_with_optional_fix(
-            Lint::RedundantCaseBeforeDefault,
-            "`case` falls through to `default`, which runs the same code",
-            label_span,
-            fix,
-        )
-    }
-}
-
 /// Reports a bare `return;` that ends a function with no return type. A body
 /// that is nothing but `return;` is left alone: it's a deliberate stub that
 /// overrides the parent's behaviour.
@@ -1930,12 +1867,6 @@ impl Visit for Rc<AstNode<VarDeclaration>> {
         );
         let modifier_names: Vec<String> = modifiers.iter().map(|m| m.to_string()).collect();
         check_access_modifiers(&modifier_names, self.span, visitor);
-        let modifiers: Vec<(String, AstSpan)> = self
-            .modifiers
-            .iter()
-            .map(|m| (m.data.to_string(), m.span))
-            .collect();
-        check_modifier_order(&modifiers, "Variable", self.span, visitor);
 
         // `var()` puts the variable in a category named after the class.
         if let Some(category) = &self.category
