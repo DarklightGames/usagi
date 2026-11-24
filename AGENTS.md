@@ -162,18 +162,18 @@ one.
 `crates/usagi-io` turns objects' native data into common file formats, as
 [`docs/ASSET_PIPELINE.md`](docs/ASSET_PIPELINE.md) designs: adapters turn
 `usagi-pkg`'s types into a few game-independent asset models (`Audio`,
-`Image`), and a `Writer` writes a model to one format (`WavWriter`,
+`Image`), a `Writer` writes a model to one format (`WavWriter`,
 `PngWriter`, `TgaWriter`, `DdsWriter`), refusing an asset it can't hold
-without loss. `usagi pkg export` uses them, and writes objects
+without loss, and a `Reader` reads one from a format (`TgaReader`). `usagi pkg export` uses them, and writes objects
 with no format as `.bin`. Keep it free of `usagi-cli`, and keep its 100%
 coverage (`cargo llvm-cov --summary-only -p usagi-io`).
 
 | Path | Contents |
 |---|---|
-| `src/lib.rs` | The `Writer` trait and `Refused`. |
+| `src/lib.rs` | The `Writer` and `Reader` traits, `Refused` and `Unusable`. |
 | `src/audio.rs` | `Audio`, from a `Sound`, and `WavWriter`. |
-| `src/image.rs` | `Image`, from a `Texture` (and its `Palette`), and `PngWriter`, `TgaWriter` and `DdsWriter`. |
-| `src/dxt.rs` | Decoding DXT1, DXT3 and DXT5 blocks. |
+| `src/image.rs` | `Image`, from a `Texture` (and its `Palette`), compressing it to DXT (`Image::compress`), `PngWriter`, `TgaWriter` and `DdsWriter`, and `TgaReader`. |
+| `src/dxt.rs` | Decoding and encoding DXT1, DXT3 and DXT5 blocks. |
 
 ## Static analysis
 

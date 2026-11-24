@@ -1,29 +1,9 @@
-//! Textures: the [`Image`] model, and writing it as PNG, TGA or DDS.
-
-use std::fmt;
+//! Textures: the [`Image`] model, compressing it to DXT, writing it as
+//! PNG, TGA or DDS, and reading it from TGA.
 
 use usagi_pkg::{Color, Palette, Texture, TextureFormat};
 
-use crate::{Refused, Writer};
-
-/// Why a texture can't be made into an [`Image`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Unusable {
-    /// Something usagi doesn't convert, such as a format.
-    Unsupported(String),
-    /// Data the engine would fail on, or read past the end of.
-    Malformed(String),
-}
-
-impl fmt::Display for Unusable {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Unusable::Unsupported(why) | Unusable::Malformed(why) => f.write_str(why),
-        }
-    }
-}
-
-impl std::error::Error for Unusable {}
+use crate::{Reader, Refused, Unusable, Writer};
 
 /// One mipmap of an [`Image`]: its size, and its pixels in the image's
 /// format, exactly as many bytes as that takes.
@@ -192,10 +172,90 @@ impl Image {
         }
     }
 
+    /// The image compressed to `format`, `DXT1`, `DXT3` or `DXT5`, as
+    /// UnrealEd's `UTexture::Compress` does: from its largest mipmap,
+    /// with, if `mipmaps`, every smaller mipmap down to 1×1, each the
+    /// average of 2×2 pixels of the one before (nvDXT's box filter). DXT1
+    /// has no alpha: UnrealEd asks for DXT1 without it.
+    ///
+    /// The engine compresses with NVIDIA's nvDXTlib, whose source isn't
+    /// in the engine's, so the blocks aren't bit for bit the ones UnrealEd
+    /// would make. `UTexture::Compress`'s border and fade options, which
+    /// UnrealEd's `TEXTURE IMPORT` sets for modulated and additive
+    /// textures, aren't supported.
+    ///
+    /// # Errors
+    ///
+    /// [`Unusable::Unsupported`] for a `format` other than those three,
+    /// and for an image that isn't `P8` or `RGBA8`, the only formats the
+    /// engine compresses.
+    pub fn compress(&self, format: TextureFormat, mipmaps: bool) -> Result<Image, Unusable> {
+        if !matches!(
+            format,
+            TextureFormat::Dxt1 | TextureFormat::Dxt3 | TextureFormat::Dxt5
+        ) {
+            return Err(Unusable::Unsupported(format!(
+                "only DXT1, DXT3 and DXT5 are compressed to, not {}",
+                format.name()
+            )));
+        }
+        let rgba = match (self.format, self.pixels()) {
+            (TextureFormat::P8 | TextureFormat::Rgba8, Pixels::Rgba(rgba)) => rgba,
+            _ => {
+                return Err(Unusable::Unsupported(format!(
+                    "only P8 and RGBA8 textures are compressed, and it's {}",
+                    self.format.name()
+                )));
+            }
+        };
+        let (mut width, mut height) = self.size();
+        let mut levels = vec![Level {
+            width,
+            height,
+            data: crate::dxt::encode(format, width, height, &rgba),
+        }];
+        // Each mipmap is made from the one before, unrounded.
+        let mut pixels: Vec<f32> = rgba.iter().map(|&v| f32::from(v)).collect();
+        while mipmaps && (width > 1 || height > 1) {
+            (pixels, width, height) = downsample(&pixels, width, height);
+            let rounded: Vec<u8> = pixels.iter().map(|&v| v.round() as u8).collect();
+            levels.push(Level {
+                width,
+                height,
+                data: crate::dxt::encode(format, width, height, &rounded),
+            });
+        }
+        Ok(Image {
+            format,
+            levels,
+            palette: Vec::new(),
+        })
+    }
+
     /// The size of its largest mipmap.
     fn size(&self) -> (usize, usize) {
         (self.levels[0].width, self.levels[0].height)
     }
+}
+
+/// A `width`×`height` RGBA image halved in each dimension that's more
+/// than 1, each pixel the average of the 2×2 (or 2×1) it covers. Of an
+/// odd number of rows or columns, the last is left out.
+fn downsample(pixels: &[f32], width: usize, height: usize) -> (Vec<f32>, usize, usize) {
+    let (w, h) = ((width / 2).max(1), (height / 2).max(1));
+    let (dx, dy) = (usize::from(width > 1), usize::from(height > 1));
+    let mut out = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let (x0, y0) = (x * 2, y * 2);
+            let at = |x: usize, y: usize, k: usize| pixels[(y * width + x) * 4 + k];
+            out.extend((0..4).map(|k| {
+                (at(x0, y0, k) + at(x0 + dx, y0, k) + at(x0, y0 + dy, k) + at(x0 + dx, y0 + dy, k))
+                    / 4.0
+            }));
+        }
+    }
+    (out, w, h)
 }
 
 /// How many bytes a `width`×`height` mipmap takes in `format`; `None` if
@@ -294,6 +354,204 @@ impl Writer<Image> for TgaWriter {
         out.extend([0; 8]);
         out.extend(b"TRUEVISION-XFILE.\0");
         Ok(())
+    }
+}
+
+/// Reads TGA files: colour-mapped (types 1 and 9), true-colour (2 and
+/// 10) and greyscale (3 and 11), uncompressed or run-length encoded.
+/// Greyscale 8-bit images are read as `L8`; everything else as `RGBA8`:
+/// colour-mapped pixels as their colours, 15- and 16-bit ones (5:5:5) with
+/// each channel's high bits repeated in the low, and 16-bit greyscale as
+/// grey and alpha. A 16-bit colour's top bit is its alpha only if the
+/// descriptor says there's alpha; 32-bit colours' alpha is always read.
+/// The descriptor's origin is followed: rows from the bottom or the top,
+/// and pixels from the left or the right. Run-length packets may cross
+/// rows, and the last may go past the image's end.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TgaReader;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TgaKind {
+    Mapped,
+    TrueColor,
+    Gray,
+}
+
+/// A 5:5:5 colour (blue in the low bits), with its top bit as alpha if
+/// `alpha`, as RGBA.
+fn rgb555(v: u16, alpha: bool) -> [u8; 4] {
+    let channel = |shift: u16| {
+        let c = ((v >> shift) & 0x1F) as u8;
+        c << 3 | c >> 2
+    };
+    let a = if alpha && v & 0x8000 == 0 { 0 } else { 255 };
+    [channel(10), channel(5), channel(0), a]
+}
+
+/// A colour of 2, 3 or 4 bytes, as TGA stores it (blue first), as RGBA.
+fn tga_color(bytes: &[u8], alpha: bool) -> [u8; 4] {
+    match bytes.len() {
+        2 => rgb555(u16::from_le_bytes([bytes[0], bytes[1]]), alpha),
+        3 => [bytes[2], bytes[1], bytes[0], 255],
+        _ => [bytes[2], bytes[1], bytes[0], bytes[3]],
+    }
+}
+
+impl Reader<Image> for TgaReader {
+    fn extension(&self) -> &'static str {
+        "tga"
+    }
+
+    /// # Errors
+    ///
+    /// [`Unusable::Unsupported`] for another type of image, or a bit depth
+    /// its type can't have, and [`Unusable::Malformed`] for a file too
+    /// short for its header, colour map or pixels, a colour-mapped image
+    /// without a colour map or with an index past its end, or an image 0
+    /// pixels wide or high.
+    fn read(&self, file: &[u8]) -> Result<Image, Unusable> {
+        let Some(header) = file.get(..18) else {
+            return Err(Unusable::Malformed(
+                "it's too short for a TGA header".to_string(),
+            ));
+        };
+        let word = |at: usize| usize::from(u16::from_le_bytes([header[at], header[at + 1]]));
+        let (has_map, map_first, map_length, map_bits) =
+            (header[1] == 1, word(3), word(5), header[7]);
+        let (width, height, bits, descriptor) = (word(12), word(14), header[16], header[17]);
+        let alpha = descriptor & 0x0F != 0;
+        let (kind, rle) = match header[2] {
+            1 => (TgaKind::Mapped, false),
+            2 => (TgaKind::TrueColor, false),
+            3 => (TgaKind::Gray, false),
+            9 => (TgaKind::Mapped, true),
+            10 => (TgaKind::TrueColor, true),
+            11 => (TgaKind::Gray, true),
+            other => {
+                return Err(Unusable::Unsupported(format!(
+                    "its TGA image type, {}, isn't supported",
+                    other
+                )));
+            }
+        };
+        let size = match (kind, bits) {
+            (TgaKind::Mapped | TgaKind::Gray, 8) => 1,
+            (TgaKind::Mapped | TgaKind::Gray, 16) | (TgaKind::TrueColor, 15 | 16) => 2,
+            (TgaKind::TrueColor, 24) => 3,
+            (TgaKind::TrueColor, 32) => 4,
+            _ => {
+                return Err(Unusable::Unsupported(format!(
+                    "a {}-bit TGA of type {} isn't supported",
+                    bits, header[2]
+                )));
+            }
+        };
+        if width == 0 || height == 0 {
+            return Err(Unusable::Malformed(format!("it's {}×{}", width, height)));
+        }
+        let short = || Unusable::Malformed("it ends before its last pixel".to_string());
+        let mut data = file.get(18 + usize::from(header[0])..).ok_or_else(short)?;
+        // The colour map, as RGBA; skipped for images that don't use it.
+        let mut map = Vec::new();
+        if has_map {
+            let entry = match map_bits {
+                15 | 16 => 2,
+                24 => 3,
+                32 => 4,
+                other => {
+                    return Err(Unusable::Unsupported(format!(
+                        "its colour map's entries are {} bits, which isn't supported",
+                        other
+                    )));
+                }
+            };
+            let bytes = data
+                .get(..map_length * entry)
+                .ok_or_else(|| Unusable::Malformed("it ends in its colour map".to_string()))?;
+            if kind == TgaKind::Mapped {
+                map = bytes
+                    .chunks_exact(entry)
+                    .map(|c| tga_color(c, map_bits == 16 && alpha))
+                    .collect();
+            }
+            data = &data[map_length * entry..];
+        } else if kind == TgaKind::Mapped {
+            return Err(Unusable::Malformed(
+                "it's colour-mapped, but has no colour map".to_string(),
+            ));
+        }
+        let count = width * height;
+        // The pixels in the file's order, `size` bytes each.
+        let pixels = if rle {
+            let mut pixels = Vec::with_capacity(count * size);
+            while pixels.len() < count * size {
+                let (&packet, rest) = data.split_first().ok_or_else(short)?;
+                let run = usize::from(packet & 0x7F) + 1;
+                let (repeated, length) = if packet & 0x80 != 0 {
+                    (run, 1)
+                } else {
+                    (1, run)
+                };
+                let run_data = rest.get(..length * size).ok_or_else(short)?;
+                for _ in 0..repeated {
+                    pixels.extend(run_data);
+                }
+                data = &rest[length * size..];
+            }
+            pixels.truncate(count * size);
+            pixels
+        } else {
+            data.get(..count * size).ok_or_else(short)?.to_vec()
+        };
+        let gray = kind == TgaKind::Gray && size == 1;
+        let out_size = if gray { 1 } else { 4 };
+        let (from_right, from_top) = (descriptor & 0x10 != 0, descriptor & 0x20 != 0);
+        let mut out = vec![0; count * out_size];
+        for (i, pixel) in pixels.chunks_exact(size).enumerate() {
+            let (x, y) = (i % width, i / width);
+            let x = if from_right { width - 1 - x } else { x };
+            let y = if from_top { y } else { height - 1 - y };
+            if gray {
+                out[y * width + x] = pixel[0];
+                continue;
+            }
+            let rgba = match kind {
+                TgaKind::Gray => [pixel[0], pixel[0], pixel[0], pixel[1]],
+                TgaKind::TrueColor => tga_color(pixel, alpha),
+                TgaKind::Mapped => {
+                    let index = if size == 1 {
+                        usize::from(pixel[0])
+                    } else {
+                        usize::from(u16::from_le_bytes([pixel[0], pixel[1]]))
+                    };
+                    *index
+                        .checked_sub(map_first)
+                        .and_then(|entry| map.get(entry))
+                        .ok_or_else(|| {
+                            Unusable::Malformed(format!(
+                                "a pixel's colour index, {}, isn't in its colour map",
+                                index
+                            ))
+                        })?
+                }
+            };
+            // RGBA8 is stored blue first.
+            let at = (y * width + x) * 4;
+            out[at..at + 4].copy_from_slice(&[rgba[2], rgba[1], rgba[0], rgba[3]]);
+        }
+        Ok(Image {
+            format: if gray {
+                TextureFormat::L8
+            } else {
+                TextureFormat::Rgba8
+            },
+            levels: vec![Level {
+                width,
+                height,
+                data: out,
+            }],
+            palette: Vec::new(),
+        })
     }
 }
 

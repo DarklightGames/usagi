@@ -10,8 +10,10 @@ data types (step 1, below) read textures and sounds, which `usagi pkg diff`
 compares; sounds export as WAV, through all three layers: `Sound`, the
 `Audio` model and `WavWriter`, in `usagi-io`; and textures export as DDS,
 PNG and TGA, through `Texture` and `Palette`, the `Image` model, and
-`DdsWriter`, `PngWriter` and `TgaWriter`. The native data
-formats known so far are in
+`DdsWriter`, `PngWriter` and `TgaWriter`. Going the other way, so far
+only within `usagi-io`, `TgaReader` reads a TGA file into an `Image`,
+and `Image::compress` compresses one to DXT as UnrealEd's
+`UTexture::Compress` does. The native data formats known so far are in
 [PACKAGE_FORMAT.md](PACKAGE_FORMAT.md#native-data).
 
 ## Goals
@@ -124,7 +126,26 @@ model: `Texture` ↔ `Image`, `Sound` ↔ `Audio`, `StaticMesh` and
 Each declares the asset model it takes and the format it writes: `Image` →
 DDS, PNG, TGA; `Audio` → WAV; `Mesh` → glTF, PSK; `Animation` → glTF, PSA.
 A writer may refuse an asset it can't hold without loss (DDS and a `P8`
-image). Readers of formats, for importing, go the other way.
+image). Readers of formats (the `Reader` trait), for importing, go the
+other way.
+
+Done so far: `TgaReader`, a standard TGA reader rather than a copy of
+UnrealEd's importer, whose quirks (ignoring the descriptor's origin,
+16-bit read as greyscale) cause more trouble than they're worth:
+colour-mapped, true-colour and greyscale images, uncompressed or
+run-length encoded, at every bit depth the format defines, following
+the descriptor's origin. 8-bit greyscale is read as `L8` and the rest as
+`RGBA8`.
+
+`Image::compress` makes DXT1, DXT3 and DXT5 images from `P8` and `RGBA8`
+ones, with box-filtered mipmaps down to 1×1, as `UTexture::Compress`
+asks NVIDIA's nvDXTlib for: DXT1 without alpha (`kDXT1`), allowing
+three-colour blocks, without dithering. nvDXTlib is only in the engine's
+source as a compiled library, so the encoder is usagi's own (a
+principal-axis fit refined by least squares, exact for solid colours),
+and its blocks aren't bit for bit UnrealEd's. `Compress`'s border and
+fade options, which `TEXTURE IMPORT` sets for modulated and additive
+textures, aren't supported.
 
 They're in a crate of their own, `usagi-io`, so that `usagi-pkg` stays a
 reader of the package format without image or audio dependencies.
