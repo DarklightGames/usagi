@@ -61,6 +61,33 @@ fn full_output_shows_the_source() {
 }
 
 #[test]
+fn full_output_underlines_after_tabs() {
+    // A tab is shown as spaces to the next multiple of 4, and the underline
+    // moves with it; the column still counts a tab as one.
+    let source = "class Foo extends Object;\nfunction F(int A)\n{\n\t\t\tA = A; \tA = A;\n}\n";
+    let dir = project(&[("Foo.uc", source)]);
+    let output = usagi(dir.path())
+        .args(["lint", "--color", "never", "--select", "S003"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let expected_first = "\
+ --> Foo.uc:4:4
+  |
+4 |             A = A;  A = A;
+  |             -----
+";
+    let expected_second = "\
+ --> Foo.uc:4:12
+  |
+4 |             A = A;  A = A;
+  |                     -----
+";
+    assert!(stdout.contains(expected_first), "{}", stdout);
+    assert!(stdout.contains(expected_second), "{}", stdout);
+}
+
+#[test]
 fn json_output() {
     let dir = project(&[("Foo.uc", SELF_ASSIGNMENT)]);
     let output = usagi(dir.path())

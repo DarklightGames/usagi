@@ -134,7 +134,13 @@ fn render(renderer: &Renderer, report: &FileReport, path: &str, problem: &Proble
             .next()
             .map_or(start, |c| start + c.len_utf8())
     };
-    let snippet = Snippet::source(text)
+    // annotate-snippets prints a tab as spaces but doesn't move the
+    // underline to match, so expand the tabs here.
+    let (text, start, end) = expand_tabs(text, start, end);
+    // ...and it works out the header's column from the expanded text, but a
+    // tab is one column everywhere else.
+    let expanded_column = text[..start].chars().count() + 1;
+    let snippet = Snippet::source(&text)
         .line_start(problem.line)
         .origin(path)
         .annotation(level.span(start..end));
@@ -143,7 +149,52 @@ fn render(renderer: &Renderer, report: &FileReport, path: &str, problem: &Proble
     if let Some(help) = &help {
         message = message.footer(Level::Help.title(help));
     }
-    renderer.render(message).to_string()
+    renderer.render(message).to_string().replacen(
+        &format!(" {}:{}:{}", path, problem.line, expanded_column),
+        &format!(" {}:{}:{}", path, problem.line, problem.column),
+        1,
+    )
+}
+
+/// How many columns a tab takes when a problem's source is shown.
+const TAB_WIDTH: usize = 4;
+
+/// `text` with each tab replaced by spaces up to the next tab stop, and the
+/// byte offsets `start` and `end` moved to match.
+fn expand_tabs(text: &str, start: usize, end: usize) -> (String, usize, usize) {
+    let mut expanded = String::with_capacity(text.len());
+    let (mut new_start, mut new_end) = (start, end);
+    let mut column = 0;
+    for (i, c) in text.char_indices() {
+        if i == start {
+            new_start = expanded.len();
+        }
+        if i == end {
+            new_end = expanded.len();
+        }
+        match c {
+            '\t' => {
+                let width = TAB_WIDTH - column % TAB_WIDTH;
+                expanded.extend(std::iter::repeat_n(' ', width));
+                column += width;
+            }
+            '\n' => {
+                expanded.push(c);
+                column = 0;
+            }
+            _ => {
+                expanded.push(c);
+                column += 1;
+            }
+        }
+    }
+    if end == text.len() {
+        new_end = expanded.len();
+    }
+    if start == text.len() {
+        new_start = expanded.len();
+    }
+    (expanded, new_start, new_end)
 }
 
 /// The title of `problem`'s fix, if it can be applied with `--fix`.
