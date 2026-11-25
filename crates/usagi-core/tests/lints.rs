@@ -845,6 +845,14 @@ fn enum_and_bool_name_prefixes() {
         Vec::<&str>::new()
     );
     assert_eq!(
+        only(&["N007"], "class Foo2 extends Object;\n"),
+        vec!["N007"]
+    );
+    assert_eq!(
+        only(&["N007"], "class F2oo extends Object;\n"),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
         only(&["N004"], "class Foo extends Object;\nvar bool Flag;\n"),
         vec!["N004"]
     );

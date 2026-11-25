@@ -191,6 +191,7 @@ never applied from the command line; they are for an editor to offer.
 | N004 | `bool-name-prefix` | Warning |  | A `bool` variable name that doesn't begin with `b`. |
 | N005 | `object-literal-type-case` | Warning |  | An object literal type that doesn't begin with a capital letter, e.g. `texture'Foo'`. |
 | N006 | `identifier-case-mismatch` | Warning | Sometimes | A name written with different capitalization than its declaration in the same file. |
+| N007 | `class-name-ends-in-digit` | Warning |  | A class name that ends in a digit. UCC warns about it too, but `usagi build` hides that warning, since renaming a class can break everything that refers to it and fixing it may not be practical. The engine strips trailing digits when naming instances, so `Tank_M4A3E8` makes `Tank_M4A3E0`, `Tank_M4A3E1`, …, which is confusing in logs but harmless.
 
 ### Documentation
 

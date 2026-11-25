@@ -2028,6 +2028,14 @@ impl Visit for AstNode<ClassDeclaration> {
             self.span,
             visitor,
         );
+        if self.name.string.ends_with(|c: char| c.is_ascii_digit()) {
+            // UCC warns about it too, but `usagi build` hides that warning.
+            visitor.report(
+                Lint::ClassNameEndsInDigit,
+                "Class names shouldn't end in a digit",
+                self.name.span,
+            );
+        }
         for modifier in &self.modifiers {
             if let Some(arguments) = &modifier.arguments {
                 arguments.visit(visitor);

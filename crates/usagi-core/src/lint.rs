@@ -249,6 +249,8 @@ lints! {
         "An object literal type that doesn't begin with a capital letter, e.g. `texture'Foo'`."),
     IdentifierCaseMismatch = ("N006", "identifier-case-mismatch", Naming, Warning, Sometimes,
         "A name written with different capitalization than its declaration."),
+    ClassNameEndsInDigit = ("N007", "class-name-ends-in-digit", Naming, Warning, Never,
+        "A class name that ends in a digit."),
 
     // Documentation
     ContinuedTrailingComment = ("D001", "continued-trailing-comment", Documentation, Warning, Never,

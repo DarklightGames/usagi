@@ -267,7 +267,8 @@ MyMod/Classes/Foo.uc:87: error: defaultproperties: Unknown property in defaults:
   `ScriptWarning` are warnings.
 - The warning `Class names shouldn't end in a digit` is never shown, even
   with `--verbose`: it has no effect, and a project often can't rename the
-  classes. It stays in `UCC.log`.
+  classes. It stays in `UCC.log`, and `usagi lint` reports it as N007
+  (`class-name-ends-in-digit`).
 
 `System/UCC.log` keeps UCC's own output.
 
