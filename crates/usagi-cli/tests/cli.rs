@@ -653,6 +653,9 @@ if [ "$cmd" = Editor.MakeCommandlet ]; then
     echo "Analyzing..."
     for f in ../$p/Classes/*.uc; do echo "Parsing $(basename "$f" .uc)"; done
     for f in ../$p/Classes/*.uc; do echo "Compiling $(basename "$f" .uc)"; done
+    for f in ../$p/Classes/*[0-9].uc; do
+      [ -e "$f" ] && printf '%s\r\n' "Z:$(cd .. && pwd | tr / '\\')\\$p\\Classes\\$(basename "$f")(1) : Warning, Class names shouldn't end in a digit"
+    done
     if [ -e ../$p/Classes/Broken.uc ]; then
       file="Z:$(cd .. && pwd | tr / '\\')\\$p\\Classes\\Broken.uc"
       printf '%s\r\n' "$file(2) : Error, broken"
@@ -1172,6 +1175,18 @@ fn modless_game(config: &str) -> TempDir {
         ("B/Classes/B.uc", "class B extends A;\n"),
         ("C/Classes/C.uc", "class C extends B;\n"),
     ])
+}
+
+#[cfg(unix)]
+#[test]
+fn class_names_ending_in_a_digit_are_not_reported() {
+    let dir = modless_game("");
+    let root = dir.path();
+    fs::write(root.join("C/Classes/C2.uc"), "class C2 extends B;\n").unwrap();
+    let (code, out) = build(root, &["--verbose"]);
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("Compiling C2"), "{}", out);
+    assert!(!out.contains("end in a digit"), "{}", out);
 }
 
 #[cfg(unix)]

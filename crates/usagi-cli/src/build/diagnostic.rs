@@ -35,6 +35,15 @@ const SEVERITIES: [&str; 4] = ["Error", "Warning", "ExecWarning", "ScriptWarning
 
 const DEFAULTPROPERTIES: &str = "defaultproperties";
 
+/// UCC's warnings that are never shown: they have no consequence and can't
+/// always be fixed (renaming a class breaks everything that refers to it).
+const IGNORED_WARNINGS: [&str; 1] = ["Class names shouldn't end in a digit"];
+
+/// Whether `line` is one of UCC's warnings that the build doesn't show.
+pub fn is_ignored(line: &str) -> bool {
+    parse(line).is_some_and(|d| !d.is_error && IGNORED_WARNINGS.contains(&d.message.trim()))
+}
+
 /// One of UCC's errors or warnings, as it printed it.
 #[derive(Debug, PartialEq, Eq)]
 struct UccDiagnostic<'a> {
@@ -499,6 +508,18 @@ mod tests {
         let single = "defaultproperties\n{\n    X=1\n}\n";
         assert_eq!(find_defaults_line(single, "redundant data: X=1"), Some(3));
         assert_eq!(find_defaults_line("defaultpropertiesX\n", "x"), None);
+    }
+
+    #[test]
+    fn ignores_pointless_warnings() {
+        assert!(is_ignored(
+            r"Z:\G\A\Classes\B2.uc(9) : Warning, Class names shouldn't end in a digit"
+        ));
+        assert!(!is_ignored(
+            r"Z:\G\A\Classes\B2.uc(9) : Error, Class names shouldn't end in a digit"
+        ));
+        assert!(!is_ignored(r"Z:\G\A\Classes\B.uc(9) : Warning, Odd"));
+        assert!(!is_ignored("Class names shouldn't end in a digit"));
     }
 
     #[test]

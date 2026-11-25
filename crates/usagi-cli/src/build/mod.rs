@@ -358,7 +358,9 @@ pub fn run(options: &Options) -> Result<bool, String> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut rewriter = diagnostic::Rewriter::new(packages.iter().flat_map(|p| &p.files), cwd);
     let status = ucc.run_streaming(&make_args, &mut |line| {
-        reporter.ucc_line(&rewriter.rewrite(line))
+        if !diagnostic::is_ignored(line) {
+            reporter.ucc_line(&rewriter.rewrite(line))
+        }
     })?;
 
     // Dumping localization overwrites UCC.log, which editors read for errors.

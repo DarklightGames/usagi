@@ -265,6 +265,9 @@ MyMod/Classes/Foo.uc:87: error: defaultproperties: Unknown property in defaults:
   warnings.
 - UCC's `Error` is an error; its `Warning`, `ExecWarning` and
   `ScriptWarning` are warnings.
+- The warning `Class names shouldn't end in a digit` is never shown, even
+  with `--verbose`: it has no effect, and a project often can't rename the
+  classes. It stays in `UCC.log`.
 
 `System/UCC.log` keeps UCC's own output.
 
