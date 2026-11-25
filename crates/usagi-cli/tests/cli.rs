@@ -621,7 +621,8 @@ fn format_config() {
 /// the packages are the `+EditPackages` of the mod's `Default.ini`, compiled ones are in the mod's System folder,
 /// and new ones are written to `System/`; with `-ini=`, the packages are that
 /// INI's `EditPackages`, all in `System/`. `dumpint` writes the package's
-/// `.int`, and fails with the error that the real DumpInt reports for its own
+/// `.int` (unless a source mentions `NoStrings`: one with no localizable
+/// strings gets none), and fails with the error that the real DumpInt reports for its own
 /// name. Both overwrite `UCC.log`.
 #[cfg(unix)]
 const FAKE_UCC: &str = r#"cmd=$1
@@ -668,7 +669,7 @@ if [ "$cmd" = Editor.MakeCommandlet ]; then
 else
   p=${pkg%.u}
   echo "No packages found matching Editor.DumpIntCommandlet!"
-  echo "[Public]" > $p.int
+  grep -q NoStrings ../$p/Classes/*.uc || echo "[Public]" > $p.int
   echo "Failure - 1 error(s), 0 warning(s)"
   echo dumpint > UCC.log
   exit 1
@@ -1171,6 +1172,28 @@ fn modless_game(config: &str) -> TempDir {
         ("B/Classes/B.uc", "class B extends A;\n"),
         ("C/Classes/C.uc", "class C extends B;\n"),
     ])
+}
+
+#[cfg(unix)]
+#[test]
+fn dumpint_without_localizable_strings_is_not_an_error() {
+    let dir = modless_game("");
+    let root = dir.path();
+    fs::write(
+        root.join("C/Classes/C.uc"),
+        "class C extends B; // NoStrings\n",
+    )
+    .unwrap();
+    let (code, out) = build(root, &["--dumpint"]);
+    assert_eq!(code, 0, "{}", out);
+    assert!(
+        out.contains("Exported localization: 4 succeeded, 0 failed"),
+        "{}",
+        out
+    );
+    assert!(!out.contains("no C.int was written"), "{}", out);
+    assert!(root.join("System/A.int").is_file());
+    assert!(!root.join("System/C.int").exists());
 }
 
 #[cfg(unix)]

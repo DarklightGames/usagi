@@ -148,8 +148,9 @@ impl Ucc {
     }
 
     /// Exports the localization of `packages` in parallel, ticking `ticker`
-    /// as each finishes. A package fails if UCC fails or doesn't write its
-    /// `.int` file.
+    /// as each finishes. A package fails if UCC fails. A package with no
+    /// localizable strings gets no `.int` file, which is only an error when
+    /// UCC failed too.
     pub fn dumpint(
         &self,
         packages: &[&str],
@@ -205,10 +206,11 @@ impl Ucc {
                                 .filter(|line| !is_dumpint_self_match(line))
                                 .map(|line| line.trim_end_matches('\r').to_string()),
                         );
-                        if !int_written {
+                        let ok = dumpint_succeeded(o.status.success(), &text);
+                        if !ok && !int_written {
                             lines.push(format!("{}: no {}.int was written", package, package));
                         }
-                        int_written && dumpint_succeeded(o.status.success(), &text)
+                        ok
                     }
                     Err(e) => {
                         lines.push(format!(

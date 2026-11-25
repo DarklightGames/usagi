@@ -172,8 +172,8 @@ A build does the following:
 10. With `--dumpint`, exports the localization (`.int` files) of the
     packages whose sources changed. The exports run in parallel; their
     output is shown only for the ones that fail, or with `--verbose`. An
-    export succeeds when it writes the `.int` file and UCC reports no errors,
-    except one: DumpInt treats its own name on the command line as a package
+    export succeeds when UCC reports no errors (a package with no localizable
+    strings gets no `.int` file, which isn't an error), except one: DumpInt treats its own name on the command line as a package
     to export, so it always reports `No packages found matching
     Editor.DumpIntCommandlet!`. That error is ignored and not shown. With a
     mod, the `.int` files are moved to `<root>/<Mod>/System`.
