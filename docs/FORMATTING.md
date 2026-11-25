@@ -30,7 +30,8 @@ them DH's, have a comment that can't be placed.
 - **Leave alone what it doesn't understand.** It never reorders declarations or
   statements, never adds or removes parentheses, and never changes
   identifiers, strings, names, `#exec` lines, `defaultproperties` bodies, or
-  the text of comments.
+  the text of comments, beyond the space after `//` (R58) and removing empty
+  end-of-line `//` comments (R57).
 - **Formatting is not linting.** `usagi lint` doesn't report formatting
   problems: the formatting lints, F001, F002 and F003, were removed, and their
   codes aren't reused. Identifier case (a reference spelled differently from
@@ -105,8 +106,9 @@ and `cpptext` bodies) are copied with it, not placed separately.
 - A comment after `case X:` stays on the `case` line.
 - A comment before a block's `}` is indented like the block's contents. In a
   `switch`, that's the indentation of the `case` labels.
-- A comment's text is never changed, and block comments aren't re-indented
-  inside.
+- A comment's text is never changed, except for a space after `//` (R58), and
+  block comments aren't re-indented inside. An empty `//` at the end of a
+  line of code is removed (R57).
 - A comment inside a line of code goes between the same two parts of it as in
   the source: two items of a list (arguments, parameters, declared names),
   two operands, two calls of a chain, a list's parentheses and its items, or
@@ -133,7 +135,8 @@ and `cpptext` bodies) are copied with it, not placed separately.
 ### Safety
 
 The printed file must parse to the same tree as the input, ignoring spans,
-with the same comments in the same order. `usagi_core::format::equivalent`
+with the same comments in the same order (compared after R57 and R58, so an
+empty end-of-line `//` may go and `//X` may become `// X`). `usagi_core::format::equivalent`
 compares two programs: every AST node implements `PartialEq`, ignoring spans,
 and `format::normalize` first undoes the changes the formatter is allowed to
 make. Those are exactly the changes the rules below make, and nothing else:
@@ -210,6 +213,9 @@ No other rule has a setting.
 | R7 | Exactly one blank line after a function's `local` declarations. |
 | R8 | Blank lines between statements are kept (R4 applies). |
 | R9 | Blank lines between `var`, `const` and other class-level declarations are kept (R4 applies). |
+| R56 | A control-flow statement (`if`, `for`, `foreach`, `while`, `do`, `switch`) has a blank line above it (above the comments directly above it), unless it's the first thing in its block or follows a `case`, `default` or jump label. |
+| R57 | An empty `//` comment at the end of a line of code is removed. One on its own line is kept. |
+| R58 | A `//` comment has a space after the `//` (`//Note` becomes `// Note`), unless it's empty, already starts with whitespace or `/`, or is only punctuation (such as a `//=====` separator). Comments in blocks copied as written, such as `defaultproperties`, are left alone. |
 
 ### Braces and blocks
 
@@ -222,6 +228,7 @@ No other rule has a setting.
 | R14 | A block written on one line, e.g. `{ return X; }`, is expanded to three lines. |
 | R14b | The body of an `if`, `else`, `for`, `foreach` or `while` is always braced; braces are added around a single statement. |
 | R15 | An empty block is `{` and `}` on separate lines, with nothing between them. |
+| R15b | A function with an empty body (`{}`, or only stray `;`) loses it: `function F() {}` becomes `function F();`, which means the same (it still overrides the parent's version and returns the default value), and is then stacked like other functions without a body (R6). A body with a comment or a `local` declaration in it is kept. |
 | R16 | `do` blocks: `}` and `until (...);` on separate lines. |
 | R17 | `};` after a struct or enum is kept: UCC requires the `;` (`RequireSymbol` in `UnScrCom.cpp`). |
 | R17b | Extra semicolons, such as `;` after a function's `}` or `;;`, are removed. |
@@ -349,9 +356,9 @@ that doesn't is broken by the rules below.
 | L1 | Breaks are never made inside a literal, or between a function's name and its `(`, and only at the `.` of a chain of calls (L7). A line that can't be broken (a long string, an object literal, an `A.B.C.D` path) is left over the width. |
 | L2 | A call's arguments that don't fit on its line go one per line, followed by a line for the `)`, all indented one level from the call's line, like parameters (R33). Each argument is laid out on its own line: one that fits there stays on it, and a call that doesn't breaks the same way, a level further in. An empty slot's comma stays on the line before (`A,,`). |
 | L2b | A list of declared names (`local`, `var`, `ignores`) that doesn't fit is filled: as many names per line as fit, with continuation lines indented one level from the line the list starts on. |
-| L3 | A chain of binary operators that doesn't fit is broken after each operator, one operand per line, with continuation lines indented one level from the line the chain starts on. |
+| L3 | A chain of binary operators that doesn't fit is broken before each operator, which starts its line, one operand per line, with continuation lines indented one level from the line the chain starts on. |
 | L4 | The loosest-binding operator is broken first (`||` before `&&`), and each tighter group stays on one line if it fits. An assignment never breaks at its operator: its right-hand side does. |
-| L5 | String concatenation (`@`, `$`) that doesn't fit is filled: as many pieces per line as fit, breaking after the operator. |
+| L5 | String concatenation (`@`, `$`) that doesn't fit is filled: as many pieces per line as fit, breaking before the operator. |
 | L6 | `replication` names that don't fit are filled, indented one level below their condition. |
 | L7 | A chain of two or more calls (`A.B(...).C(...)`) that doesn't fit is broken before each `.Call(...)`, one call per line, indented one level. A call that's an argument of a call in the chain is indented a level more. |
 | L8 | Inside parentheses, continuation lines are indented one level more than outside them. |
@@ -377,24 +384,24 @@ return Repl(
     static.GetSquadName(RelatedPRI_2.Team.TeamIndex, ExtraValue, DHSquadReplicationInfo(OptionalObject))
     );
 
-if (P == none ||
-    Interaction == none ||
-    OptionIndex >= Options.Length)
+if (P == none
+    || Interaction == none
+    || OptionIndex >= Options.Length)
 {
     return;
 }
 
-while (Controller != none &&
-    Controller.Pawn != none &&
-    Controller.Pawn.Health > 0)
+while (Controller != none
+    && Controller.Pawn != none
+    && Controller.Pawn.Health > 0)
 {
     ...
 }
 
-bDedicated = Level.NetMode == NM_DedicatedServer ||
-    (Level.NetMode == NM_ListenServer &&
-        PlayerOwner != none &&
-        PlayerOwner.Player.Console == none);
+bDedicated = Level.NetMode == NM_DedicatedServer
+    || (Level.NetMode == NM_ListenServer
+        && PlayerOwner != none
+        && PlayerOwner.Player.Console == none);
 
 replication
 {
@@ -425,6 +432,5 @@ aren't broken.
 ## Later
 
 - A T3D formatter in the `t3d` crate, for `defaultproperties` bodies (R54).
-- Comment formatting, such as `//comment` to `// comment`, and reflowing block
-  comments.
+- Reflowing block comments.
 - `format-off` and `format-on` regions.

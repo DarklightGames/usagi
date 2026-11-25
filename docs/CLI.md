@@ -46,7 +46,7 @@ recovered from are also shown, under the code `parse`.
 | `--format FORMAT` | How to print problems (see below). |
 | `--statistics` | Print the number of problems and files for each lint. |
 | `--fix` | Apply safe fixes to the files, then report the problems that are left. |
-| `--diff` | Print the changes `--fix` would make, as a unified diff, without changing any file. |
+| `--diff` | Print the changes `--fix` would make, as a unified diff, without changing any file. On a terminal (see `--color`), removed lines are red, added lines green, hunk headers cyan and file headers bold. |
 | `--strict` | Treat recovered problems as errors, as `parse --strict` does. |
 | `--include GLOB,...` / `--exclude GLOB,...` | Choose files (see below), replacing the configured lists. |
 

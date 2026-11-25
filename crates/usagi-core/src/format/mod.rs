@@ -74,7 +74,8 @@ pub fn format_text(text: &str, options: &FormatOptions) -> Result<String, Format
     let original = text;
     let text = text.replace("\r\n", "\n");
     let before = parse_program(&text).map_err(FormatError::Parse)?;
-    let output = printer::print(&text, &before.comments, &before.program, options).map_err(
+    let comments = kept_comments(&text, &before.comments);
+    let output = printer::print(&text, &comments, &before.program, options).map_err(
         |(offset, message)| FormatError::Unformattable {
             // An offset into `original`, which may have CRLFs.
             offset: original_offset(original, offset),
@@ -88,6 +89,36 @@ pub fn format_text(text: &str, options: &FormatOptions) -> Result<String, Format
             output
         }
     })
+}
+
+/// A comment with a space after its `//` (R58), unless it's empty, already
+/// starts with whitespace or `/`, or is only punctuation, such as a
+/// `//=====` separator.
+pub(crate) fn spaced_comment(comment: &str) -> String {
+    match comment.strip_prefix("//") {
+        Some(rest)
+            if !rest.starts_with(|c: char| c.is_whitespace() || c == '/')
+                && rest.contains(char::is_alphanumeric) =>
+        {
+            format!("// {rest}")
+        }
+        _ => comment.to_string(),
+    }
+}
+
+/// The comments the formatter keeps: all but empty `//` comments at the end
+/// of a line of code (R57). Blocks copied as written, such as
+/// `defaultproperties`, keep theirs, so the check ignores them on both sides.
+fn kept_comments(text: &str, comments: &[std::ops::Range<usize>]) -> Vec<std::ops::Range<usize>> {
+    comments
+        .iter()
+        .filter(|r| {
+            let line_start = text[..r.start].rfind('\n').map_or(0, |i| i + 1);
+            let empty = text[(*r).clone()].trim_end() == "//";
+            !(empty && !text[line_start..r.start].trim().is_empty())
+        })
+        .cloned()
+        .collect()
 }
 
 /// Checks that `output`, the formatted `text`, is the same program as
@@ -110,7 +141,7 @@ fn verify(
         ranges
             .iter()
             .map(|r| {
-                text[r.clone()]
+                spaced_comment(&text[r.clone()])
                     .lines()
                     .map(str::trim_end)
                     .collect::<Vec<_>>()
@@ -118,7 +149,9 @@ fn verify(
             })
             .collect()
     };
-    if comments(text, &before.comments) != comments(&output, &after.comments) {
+    if comments(text, &kept_comments(text, &before.comments))
+        != comments(&output, &kept_comments(&output, &after.comments))
+    {
         return Err(FormatError::Changed {
             reason: "the comments differ".to_string(),
             output,

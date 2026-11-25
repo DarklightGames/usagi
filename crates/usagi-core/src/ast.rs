@@ -635,6 +635,17 @@ pub struct FunctionBody {
     pub statements: Vec<FunctionBodyStatement>,
 }
 
+impl FunctionBody {
+    /// Whether the body holds nothing but stray `;`, which makes it the same
+    /// as no body.
+    pub fn is_empty(&self) -> bool {
+        self.statements.iter().all(|s| match s {
+            FunctionBodyStatement::CodeStatement(c) => matches!(c.data, CodeStatement::Empty),
+            _ => false,
+        })
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct ConstDeclaration {
     pub name: AstNode<Identifier>,

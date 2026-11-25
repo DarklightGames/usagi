@@ -1677,6 +1677,7 @@ impl Visit for AstNode<FunctionDeclaration> {
             check_redundant_return(body, visitor);
         }
         check_redundant_default_return(self, visitor);
+        check_empty_function_body(self, visitor);
         if let (Some(_), Some(body)) = (&self.return_type, &self.body) {
             let statements: Vec<_> = body
                 .statements
@@ -1731,28 +1732,64 @@ fn check_redundant_cases_before_default(cases: &[SwitchCase], visitor: &mut Visi
 /// Reports a function whose body is nothing but `return` of its return
 /// type's default value (`0`, `False`, `""`, `''`, `None`, `vect(0,0,0)`,
 /// `rot(0,0,0)`), which is what a function without a body returns.
-fn check_redundant_default_return(
-    function: &AstNode<FunctionDeclaration>,
-    visitor: &mut Visitor,
-) {
-    let (Some(return_type), Some(body)) = (&function.return_type, &function.body) else {
+fn check_redundant_default_return(function: &AstNode<FunctionDeclaration>, visitor: &mut Visitor) {
+    let Some(body) = &function.body else {
         return;
     };
     let [FunctionBodyStatement::CodeStatement(statement)] = body.statements.as_slice() else {
         return;
     };
-    let CodeStatement::Return(Some(value)) = &statement.data else {
+    // `return;` in a function without a return type, or `return` of the
+    // return type's default value.
+    let message = match (&function.return_type, &statement.data) {
+        (None, CodeStatement::Return(None)) => "only returns, as it would without a body",
+        (Some(return_type), CodeStatement::Return(Some(value)))
+            if matches!(&value.data, Expression::Literal(literal)
+                if is_default_value(return_type, &literal.data)) =>
+        {
+            "only returns the default value, which it would return without a body"
+        }
+        _ => return,
+    };
+    let fix = body_removal(body, visitor);
+    visitor.report_with_optional_fix(
+        Lint::RedundantDefaultReturn,
+        format!("{} {message}", function.name.string),
+        statement.span,
+        fix,
+    )
+}
+
+/// Reports a function whose body is empty (or only stray `;`), which is the
+/// same as having no body: both override the parent's version and return the
+/// default value.
+fn check_empty_function_body(function: &AstNode<FunctionDeclaration>, visitor: &mut Visitor) {
+    let Some(body) = &function.body else {
         return;
     };
-    let Expression::Literal(literal) = &value.data else {
-        return;
-    };
-    if !is_default_value(return_type, &literal.data) {
+    if !body.is_empty() {
         return;
     }
-    // The braces are the only non-whitespace between the header and the
-    // body, unless there are comments, which the fix mustn't lose.
-    let contents = visitor.contents;
+    let (_, braces) = body_braces(body, visitor.contents);
+    let fix = body_removal(body, visitor);
+    visitor.report_with_optional_fix(
+        Lint::EmptyFunctionBody,
+        format!(
+            "{} has an empty body, which is the same as no body",
+            function.name.string
+        ),
+        AstSpan {
+            start: braces.start,
+            end: braces.end,
+            line: None,
+        },
+        fix,
+    )
+}
+
+/// The start of the whitespace before a function body's `{`, and the span
+/// of its braces.
+fn body_braces(body: &AstNode<FunctionBody>, contents: &str) -> (usize, std::ops::Range<usize>) {
     let open = contents[..body.span.start]
         .rfind('{')
         .expect("a function body follows `{`");
@@ -1760,22 +1797,19 @@ fn check_redundant_default_return(
         + contents[body.span.end..]
             .find('}')
             .expect("a function body ends with `}`");
-    let start = contents[..open].trim_end().len();
-    let fix = (!visitor.has_comment_in(start..close + 1)).then(|| {
+    (contents[..open].trim_end().len(), open..close + 1)
+}
+
+/// A fix replacing a function's body with `;`, unless there's a comment in
+/// it, which the fix mustn't lose.
+fn body_removal(body: &AstNode<FunctionBody>, visitor: &Visitor) -> Option<Fix> {
+    let (start, braces) = body_braces(body, visitor.contents);
+    (!visitor.has_comment_in(start..braces.end)).then(|| {
         Fix::safe(
             "Remove the function's body",
-            vec![Edit::replace(start..close + 1, ";")],
+            vec![Edit::replace(start..braces.end, ";")],
         )
-    });
-    visitor.report_with_optional_fix(
-        Lint::RedundantDefaultReturn,
-        format!(
-            "{} only returns the default value, which it would return without a body",
-            function.name.string
-        ),
-        statement.span,
-        fix,
-    )
+    })
 }
 
 fn is_zero(n: &NumericLiteral) -> bool {
@@ -1814,8 +1848,8 @@ fn is_default_value(type_: &Type, literal: &Literal) -> bool {
 }
 
 /// Reports a bare `return;` that ends a function with no return type. A body
-/// that is nothing but `return;` is left alone: it's a deliberate stub that
-/// overrides the parent's behaviour.
+/// that is nothing but `return;` is left to R017, which replaces it with
+/// `;`, a stub that overrides the parent's behaviour the same way.
 fn check_redundant_return(body: &AstNode<FunctionBody>, visitor: &mut Visitor) {
     let code: Vec<_> = body
         .statements

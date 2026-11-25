@@ -205,18 +205,45 @@ fn safe_fix(problem: &Problem) -> Option<&str> {
     }
 }
 
-/// Prints a unified diff of each file that fixes changed.
-pub fn diffs(out: &mut dyn Write, reports: &[FileReport], cwd: &Path) -> io::Result<()> {
+/// Prints a unified diff of each file that fixes changed, coloured if
+/// `color`: the file headers bold, hunk headers cyan, removed lines red and
+/// added lines green.
+pub fn diffs(
+    out: &mut dyn Write,
+    reports: &[FileReport],
+    cwd: &Path,
+    color: bool,
+) -> io::Result<()> {
     for report in reports {
         if let Some(original) = &report.original {
             let path = discover::display(&report.path, cwd);
             let diff = similar::TextDiff::from_lines(original.as_str(), report.source.as_str());
-            write!(
-                out,
-                "{}",
-                diff.unified_diff()
-                    .header(&format!("a/{}", path), &format!("b/{}", path))
-            )?;
+            let text = diff
+                .unified_diff()
+                .header(&format!("a/{}", path), &format!("b/{}", path))
+                .to_string();
+            if !color {
+                write!(out, "{text}")?;
+                continue;
+            }
+            for line in text.split_inclusive('\n') {
+                // The colour ends before the line ending, `\r` included.
+                let body = line.trim_end_matches(['\r', '\n']);
+                let end = &line[body.len()..];
+                let code = if body.starts_with("---") || body.starts_with("+++") {
+                    "1"
+                } else if body.starts_with("@@") {
+                    "36"
+                } else if body.starts_with('-') {
+                    "31"
+                } else if body.starts_with('+') {
+                    "32"
+                } else {
+                    write!(out, "{line}")?;
+                    continue;
+                };
+                write!(out, "\x1b[{code}m{body}\x1b[0m{end}")?;
+            }
         }
     }
     Ok(())

@@ -15,6 +15,8 @@ use std::rc::Rc;
 ///   block (R14b): a single statement becomes a block holding it, and an `if`
 ///   with no body gets an empty one.
 /// - Empty statements and declarations (stray `;`) are removed (R17b).
+/// - A function with an empty body has none (R15b): both return the
+///   default value, and both override the parent's version.
 ///
 /// Spans aren't changed, and are ignored when comparing anyway.
 ///
@@ -89,6 +91,9 @@ fn normalize_function(function: &mut FunctionDeclaration) {
             if let FunctionBodyStatement::CodeStatement(c) = statement {
                 normalize_statement(&mut c.data);
             }
+        }
+        if body.data.statements.is_empty() {
+            function.body = None;
         }
     }
 }

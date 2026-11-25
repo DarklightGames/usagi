@@ -364,6 +364,21 @@ fn diff_changes_nothing() {
         .stdout(predicate::str::contains("+    I = Max(1);"))
         .stderr(predicate::str::contains("Would fix 3 problems in 1 file"));
     assert_eq!(fs::read(dir.path().join("Foo.uc")).unwrap(), FIXABLE);
+    // Coloured with `--color always`.
+    usagi(dir.path())
+        .args(["lint", "--diff", "--color", "always"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("\x1b[1m--- a/Foo.uc\x1b[0m\n"))
+        .stdout(predicate::str::contains("\x1b[1m+++ b/Foo.uc\x1b[0m\n"))
+        .stdout(predicate::str::contains("\x1b[36m@@ "))
+        .stdout(predicate::str::contains(
+            "\x1b[31m-    Self.I = Max(1, );\x1b[0m\r\n",
+        ))
+        .stdout(predicate::str::contains(
+            "\x1b[32m+    I = Max(1);\x1b[0m\r\n",
+        ))
+        .stdout(predicate::str::contains("\n     A = A;\r\n"));
     // Nothing to fix.
     let dir = project(&[("Bar.uc", CLEAN)]);
     usagi(dir.path())

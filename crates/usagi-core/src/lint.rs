@@ -232,7 +232,9 @@ lints! {
     UnusedSuppression = ("R016", "unused-suppression", Redundancy, Warning, Always,
         "A lint in a `usagi: ignore[...]` comment that suppresses nothing."),
     RedundantDefaultReturn = ("R017", "redundant-default-return", Redundancy, Warning, Sometimes,
-        "A function whose body only returns its return type's default value."),
+        "A function whose body only returns its return type's default value, or is only `return;`."),
+    EmptyFunctionBody = ("R018", "empty-function-body", Redundancy, Warning, Sometimes,
+        "A function with an empty body, `{}`, which is the same as no body, `;`."),
 
     // Naming
     ConstNameCase = ("N001", "const-name-case", Naming, Warning, Never,

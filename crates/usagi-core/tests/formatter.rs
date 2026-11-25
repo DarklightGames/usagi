@@ -120,8 +120,8 @@ fn r5_blank_lines_after_open_and_before_close() {
 #[test]
 fn r6_blank_lines_between_declarations() {
     assert_body(
-        "function F();\nvar int X;\n\n\n// G\nfunction G() {}",
-        "function F();\n\nvar int X;\n\n// G\nfunction G()\n{\n}\n",
+        "function F();\nvar int X;\n\n\n// G\nfunction G() { G(); }",
+        "function F();\n\nvar int X;\n\n// G\nfunction G()\n{\n    G();\n}\n",
     );
     // Functions without bodies are stacked, with no blank line between them
     // or the comments above them, even across a stray `;`, and in states.
@@ -132,7 +132,7 @@ fn r6_blank_lines_between_declarations() {
     );
     assert_body(
         "function F();;\nnative function G();\nfunction H() {}\nfunction I();\nstate S {\nfunction J();\nfunction K();\n}\nfunction L();",
-        "function F();\nnative function G();\n\nfunction H()\n{\n}\n\nfunction I();\n\nstate S\n{\n    function J();\n    function K();\n}\n\nfunction L();\n",
+        "function F();\nnative function G();\nfunction H();\nfunction I();\n\nstate S\n{\n    function J();\n    function K();\n}\n\nfunction L();\n",
     );
     assert_body(
         "// About F.\n\nfunction F();",
@@ -158,9 +158,83 @@ fn r8_r9_blank_lines_kept() {
 }
 
 #[test]
+fn r56_blank_line_above_control_flow() {
+    assert_code(
+        "A = B;\nif (A)\n{\n    C();\n    if (D) { E(); }\n}",
+        "A = B;\n\nif (A)\n{\n    C();\n\n    if (D)\n    {\n        E();\n    }\n}",
+    );
+    assert_code(
+        "A();\n// Loop.\nfor (;;) {}\nB();\nwhile (A) {}\nC();\nforeach F(X) {}",
+        "A();\n\n// Loop.\nfor (;;)\n{\n}\nB();\n\nwhile (A)\n{\n}\nC();\n\nforeach F(X)\n{\n}",
+    );
+    assert_code(
+        "A();\ndo {} until (A);\nB();\nswitch (A) {\ncase 1:\n    if (B) {}\n    C();\n    if (B) {}\n}",
+        "A();\n\ndo\n{\n}\nuntil (A);\nB();\n\nswitch (A)\n{\n    case 1:\n        if (B)\n        {\n        }\n        C();\n\n        if (B)\n        {\n        }\n}",
+    );
+    assert_body(
+        "state S\n{\nBegin:\n    if (A) {}\n}",
+        "state S\n{\nBegin:\n    if (A)\n    {\n    }\n}\n",
+    );
+}
+
+#[test]
+fn r57_empty_end_of_line_comments_removed() {
+    assert_body(
+        "var() sound S; // \nvar int X; //\n//\n// A.\nvar int Y; // B",
+        "var() sound S;\nvar int X;\n//\n// A.\nvar int Y; // B\n",
+    );
+    // A block copied as written keeps them.
+    assert_body(
+        "defaultproperties\n{\n    A=1 //\n}",
+        "defaultproperties\n{\n    A=1 //\n}\n",
+    );
+}
+
+#[test]
+fn r58_space_after_line_comment() {
+    assert_body(
+        "//Note.\n//=====\n///Doc.\n//\nvar int X; //Inline\nvar int Y; //  Two\n/*Block*/\ndefaultproperties\n{\n    A=1 //B\n}",
+        "// Note.\n//=====\n///Doc.\n//\nvar int X; // Inline\nvar int Y; //  Two\n\n/*Block*/\ndefaultproperties\n{\n    A=1 //B\n}\n",
+    );
+    // Lined-up end-of-line comments stay lined up.
+    assert_code("A(); //One\n     //Two", "A(); // One\n     // Two");
+}
+
+#[test]
 fn r10_allman_braces() {
     assert_code("if (A) {\n    B();\n}", "if (A)\n{\n    B();\n}");
-    assert_body("function F() {\n}", "function F()\n{\n}\n");
+    assert_body(
+        "function F() {\n    F();\n}",
+        "function F()\n{\n    F();\n}\n",
+    );
+}
+
+#[test]
+fn r15b_empty_function_bodies_are_removed() {
+    assert_body("function F() {}", "function F();\n");
+    assert_body(
+        "function int F(int A)\n{\n    ;\n}",
+        "function int F(int A);\n",
+    );
+    assert_body(
+        "state S\n{\n    function F() {}\n}",
+        "state S\n{\n    function F();\n}\n",
+    );
+    // Stacked like other functions without a body.
+    assert_body(
+        "function F();\nfunction G() {}",
+        "function F();\nfunction G();\n",
+    );
+    // A body with a comment in it is kept.
+    assert_body(
+        "function F() { /* stub */ }",
+        "function F()\n{ /* stub */\n}\n",
+    );
+    // So is one with only locals.
+    assert_body(
+        "function F() { local int A; }",
+        "function F()\n{\n    local int A;\n}\n",
+    );
 }
 
 #[test]
@@ -188,7 +262,7 @@ fn r14_blocks_expanded() {
 fn r14b_braces_added() {
     assert_code(
         "if (A) B();\nelse C();\nfor (I = 0; I < 1; ++I) D();\nwhile (A) E();\nforeach AllActors(Class'Actor', X) F();\ndo G(); until (A);",
-        "if (A)\n{\n    B();\n}\nelse\n{\n    C();\n}\nfor (I = 0; I < 1; ++I)\n{\n    D();\n}\nwhile (A)\n{\n    E();\n}\nforeach AllActors(Class'Actor', X)\n{\n    F();\n}\ndo\n{\n    G();\n}\nuntil (A);",
+        "if (A)\n{\n    B();\n}\nelse\n{\n    C();\n}\n\nfor (I = 0; I < 1; ++I)\n{\n    D();\n}\n\nwhile (A)\n{\n    E();\n}\n\nforeach AllActors(Class'Actor', X)\n{\n    F();\n}\n\ndo\n{\n    G();\n}\nuntil (A);",
     );
     // An `if` with no body.
     assert_code("if (A)\n// B();\n", "if (A)\n{\n}\n// B();");
@@ -221,11 +295,14 @@ fn r17_semicolons() {
 fn r18_to_r28_spacing() {
     assert_code(
         "if(A){return(B);}\nwhile( A ){}\nswitch(A){}\nX=F( A ,B )[ 1 ];\nX+=-Y*!Z++;\nfor(I=0;I<1;I++){}\nX = A.default.B + default.C + A.static.D() + static.E();\nX = super(Actor).F() + Super.G() + Self.H + global.I();",
-        "if (A)\n{\n    return (B);\n}\nwhile (A)\n{\n}\nswitch (A)\n{\n}\nX = F(A, B)[1];\nX += -Y * !Z++;\nfor (I = 0; I < 1; I++)\n{\n}\nX = A.default.B + default.C + A.static.D() + static.E();\nX = super(Actor).F() + super.G() + self.H + global.I();",
+        "if (A)\n{\n    return (B);\n}\n\nwhile (A)\n{\n}\n\nswitch (A)\n{\n}\nX = F(A, B)[1];\nX += -Y * !Z++;\n\nfor (I = 0; I < 1; I++)\n{\n}\nX = A.default.B + default.C + A.static.D() + static.E();\nX = super(Actor).F() + super.G() + self.H + global.I();",
     );
     // `- -1` mustn't become `--1`.
     assert_code("X = - -1;\nX = -(-Y);", "X = - -1;\nX = -(-Y);");
-    assert_code("for(;;){}\nfor(;A;){}", "for (;;)\n{\n}\nfor (; A;)\n{\n}");
+    assert_code(
+        "for(;;){}\nfor(;A;){}",
+        "for (;;)\n{\n}\n\nfor (; A;)\n{\n}",
+    );
     assert_code("F(A,,B);\nF(,);\nF();", "F(A,, B);\nF(,);\nF();");
     assert_code("X = A Dot B;", "X = A Dot B;");
 }
@@ -251,7 +328,7 @@ fn r29_end_of_line_comments() {
     // One space before each, however they were aligned.
     assert_code(
         "A();       // one\nB();\t/* two */   /* three */\nif (A)// four\n{ // five\n}  // six",
-        "A(); // one\nB(); /* two */ /* three */\nif (A) // four\n{ // five\n} // six",
+        "A(); // one\nB(); /* two */ /* three */\n\nif (A) // four\n{ // five\n} // six",
     );
     assert_body(
         "struct S\n{\n    var() int    X;     // one\n    var() string Name;  // two\n};",
@@ -298,8 +375,8 @@ fn r29b_continued_end_of_line_comments() {
     );
     // The blank line before a function goes after the continuation.
     assert_body(
-        "var int A; // one\n           // two\nfunction F() {}",
-        "var int A; // one\n           // two\n\nfunction F()\n{\n}\n",
+        "var int A; // one\n           // two\nfunction F() { F(); }",
+        "var int A; // one\n           // two\n\nfunction F()\n{\n    F();\n}\n",
     );
 }
 
@@ -401,8 +478,8 @@ fn r33_parameters_one_per_line() {
     };
     // Parameters that fit stay on the header's line, block comments too.
     check(
-        "function F(int A,\n    int B /* b */) {}",
-        "function F(int A, int B /* b */)\n{\n}\n",
+        "function F(int A,\n    int B /* b */) { F(); }",
+        "function F(int A, int B /* b */)\n{\n    F();\n}\n",
     );
     // Otherwise each goes on its own line, and so does the `)`.
     check(
@@ -413,7 +490,7 @@ fn r33_parameters_one_per_line() {
     // at the ends of lines or on their own lines, as written.
     check(
         "function F( // one\nint A, // two\n// three\nint B, /* four */ int C // five\n) {}",
-        "function F( // one\n    int A, // two\n    // three\n    int B, /* four */\n    int C // five\n    )\n{\n}\n",
+        "function F( // one\n    int A, // two\n    // three\n    int B, /* four */\n    int C // five\n    );\n",
     );
     // A comment inside a parameter can't be placed.
     let input = "class A extends Object;\nfunction F(int A, int /* x */ B, // y\n int C);";
@@ -703,18 +780,18 @@ fn l3_operators_one_per_line() {
     assert_code_width(
         30,
         "if (Aaaaaaaa && Bbbbbbbbbb && Cccccccccc) {}",
-        "if (Aaaaaaaa &&\n    Bbbbbbbbbb &&\n    Cccccccccc)\n{\n}",
+        "if (Aaaaaaaa\n    && Bbbbbbbbbb\n    && Cccccccccc)\n{\n}",
     );
     assert_code_width(
         30,
         "return Aaaaaaaaaa == Bbbbbbbbbbb + Cccccccccc;",
-        "return Aaaaaaaaaa ==\n    Bbbbbbbbbbb +\n        Cccccccccc;",
+        "return Aaaaaaaaaa\n    == Bbbbbbbbbbb\n        + Cccccccccc;",
     );
     // Assignments don't break at their operator.
     assert_code_width(
         20,
         "Xxxxxx = Aaaaaa || Bbbbbbb;",
-        "Xxxxxx = Aaaaaa ||\n    Bbbbbbb;",
+        "Xxxxxx = Aaaaaa\n    || Bbbbbbb;",
     );
 }
 
@@ -723,7 +800,7 @@ fn l4_loosest_operators_first() {
     assert_code_width(
         40,
         "while (Aaaaaaa && Bbbbbbb || Ccccccc && Ddddddd || (Eeeeeee && Fffffff && Ggggggg && Hhhhhhh)) {}",
-        "while (Aaaaaaa && Bbbbbbb ||\n    Ccccccc && Ddddddd ||\n    (Eeeeeee &&\n        Fffffff &&\n        Ggggggg &&\n        Hhhhhhh))\n{\n}",
+        "while (Aaaaaaa && Bbbbbbb\n    || Ccccccc && Ddddddd\n    || (Eeeeeee\n        && Fffffff\n        && Ggggggg\n        && Hhhhhhh))\n{\n}",
     );
 }
 
@@ -732,7 +809,7 @@ fn l5_concatenation_is_filled() {
     assert_code_width(
         30,
         "Log(\"Aaaaaa\" @ Bbbbbbb @ \"Cccccc\" $ Dddddd $ Eeeeee);",
-        "Log(\n    \"Aaaaaa\" @ Bbbbbbb @\n        \"Cccccc\" $\n        Dddddd $ Eeeeee\n    );",
+        "Log(\n    \"Aaaaaa\" @ Bbbbbbb\n        @ \"Cccccc\"\n        $ Dddddd $ Eeeeee\n    );",
     );
 }
 
@@ -766,7 +843,7 @@ fn comments_inside_lines() {
     // Block comments stay inline, and the line breaks only if it's too long.
     assert_code(
         "X = A /* B */ + C;\nF(/* none */);\nF(/* first */ A, B /* last */);\nif (/* A */ B /* C */) {}\nX = (A /* B */);\nY = A /* B */;\nreturn A /* B */;",
-        "X = A + /* B */ C;\nF(/* none */);\nF(/* first */ A, B /* last */);\nif (/* A */ B /* C */)\n{\n}\nX = (A /* B */);\nY = A /* B */;\nreturn A /* B */;",
+        "X = A /* B */ + C;\nF(/* none */);\nF(/* first */ A, B /* last */);\n\nif (/* A */ B /* C */)\n{\n}\nX = (A /* B */);\nY = A /* B */;\nreturn A /* B */;",
     );
     assert_code(
         "local string /* A, */ B, C;\nX = A /* B */ = C;",
@@ -775,7 +852,7 @@ fn comments_inside_lines() {
     // End-of-line comments break the line after them, after one space.
     assert_code(
         "if (A &&   // one\n    B)\n{}\nF(A,  // two\n  B);\nX = A.B()  // three\n    .C();",
-        "if (A && // one\n    B)\n{\n}\nF(\n    A, // two\n    B\n    );\nX = A\n    .B() // three\n    .C();",
+        "if (A // one\n    && B)\n{\n}\nF(\n    A, // two\n    B\n    );\nX = A\n    .B() // three\n    .C();",
     );
     // One before the `)` of a header goes after it.
     assert_code(

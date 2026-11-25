@@ -83,7 +83,7 @@ fn run(cli: Cli) -> Result<bool, String> {
             let fixed: usize = reports.iter().map(|r| r.fixed).sum();
             let fixed_files = reports.iter().filter(|r| r.fixed > 0).count();
             if args.diff {
-                output::diffs(&mut out, &reports, &cwd).map_err(|e| e.to_string())?;
+                output::diffs(&mut out, &reports, &cwd, color).map_err(|e| e.to_string())?;
                 eprintln!(
                     "Would fix {} {} in {} {}",
                     fixed,

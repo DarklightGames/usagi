@@ -45,6 +45,7 @@ pub(super) fn print(
         line_level: 0,
         flat: false,
         after_open: false,
+        after_label: false,
         force_blank: false,
         after_bodiless_function: false,
         no_blank: false,
@@ -88,6 +89,8 @@ struct Printer<'a> {
     flat: bool,
     /// Whether the last line opened a block, so no blank line may follow.
     after_open: bool,
+    /// Whether the last line was a `case`, `default` or jump label.
+    after_label: bool,
     /// Whether the next line must be preceded by a blank line.
     force_blank: bool,
     /// Whether the last declaration printed was a function without a body,
@@ -183,6 +186,7 @@ impl<'a> Printer<'a> {
 
     fn push_line(&mut self, line: String) {
         self.after_open = line.trim_end().ends_with('{');
+        self.after_label = false;
         self.lines.push(line);
     }
 
@@ -391,7 +395,7 @@ impl<'a> Printer<'a> {
     /// without a body that follows another (`stacked`) has no blank line
     /// before it, or before the comments above it.
     fn spaced_function(&mut self, f: &AstNode<FunctionDeclaration>, stacked: bool) {
-        let bodiless = f.data.body.is_none();
+        let bodiless = self.empty_body(f);
         self.no_blank = bodiless && stacked;
         self.force_blank = !self.no_blank;
         self.function(f);
@@ -785,8 +789,13 @@ impl<'a> Printer<'a> {
         let head = format!("{} {}(", parts.join(" "), d.name.string);
         let open_parenthesis = self.next_token(d.name.span.end) + 1;
         let level = self.level;
-        let Some(body) = &d.body else {
-            let close = self.prev_token_end(f.span.end - 1) - 1;
+        let body = d.body.as_ref().filter(|_| !self.empty_body(f));
+        let Some(body) = body else {
+            // R15b: an empty body becomes `;`.
+            let close = match &d.body {
+                Some(body) => self.prev_token_end(self.prev_token_end(body.span.start) - 1) - 1,
+                None => self.prev_token_end(f.span.end - 1) - 1,
+            };
             self.code_line(f.span.start..f.span.end, true, level, |p| {
                 p.put(&head);
                 p.layout_parameters(open_parenthesis, close, &arguments, 2, level + 1);
@@ -821,6 +830,16 @@ impl<'a> Printer<'a> {
             }
         }
         self.close(f.span.end - 1);
+    }
+
+    /// Whether `f` has no body, or an empty one (nothing but stray `;`) with
+    /// no comments in it, which is the same thing (R15b).
+    fn empty_body(&self, f: &AstNode<FunctionDeclaration>) -> bool {
+        let Some(body) = &f.data.body else {
+            return true;
+        };
+        let open = self.prev_token_end(body.span.start) - 1;
+        body.data.is_empty() && self.comments_in(open..f.span.end).is_none()
     }
 
     fn local(&mut self, l: &AstNode<LocalDeclaration>) {
@@ -923,6 +942,7 @@ impl<'a> Printer<'a> {
                 &format!("{}:", label.label.string),
                 true,
             );
+            self.after_label = true;
             for statement in &label.statements {
                 self.statement(statement);
             }
@@ -935,6 +955,20 @@ impl<'a> Printer<'a> {
 
     fn statement(&mut self, s: &AstNode<CodeStatement>) {
         let span = s.span.start..s.span.end;
+        // R56: a blank line above a control-flow statement, unless it's the
+        // first in its block or follows a label.
+        if matches!(
+            s.data,
+            CodeStatement::ForEach(_)
+                | CodeStatement::For(_)
+                | CodeStatement::While(_)
+                | CodeStatement::DoUntil(_)
+                | CodeStatement::Switch(_)
+                | CodeStatement::Conditional(_)
+        ) && !self.after_label
+        {
+            self.force_blank = true;
+        }
         match &s.data {
             CodeStatement::Empty => {}
             CodeStatement::Expression(e) => {
@@ -968,7 +1002,8 @@ impl<'a> Printer<'a> {
                 self.line(span, &text, true);
             }
             CodeStatement::JumpLabel(label) => {
-                self.line_at_column_0(span, &format!("{}:", label.string), true)
+                self.line_at_column_0(span, &format!("{}:", label.string), true);
+                self.after_label = true;
             }
             CodeStatement::CompilerDirective(d) => self.directive(span, &d.command),
             CodeStatement::ConstDeclaration(c) => self.constant(c),
@@ -1027,6 +1062,7 @@ impl<'a> Printer<'a> {
                         SwitchCaseType::Default => "default:".to_string(),
                     };
                     self.line(case.label_span.start..case.label_span.end, &label, true);
+                    self.after_label = true;
                     self.level += 1;
                     for statement in &case.statements {
                         self.statement(statement);
@@ -1351,7 +1387,7 @@ impl<'a> Printer<'a> {
     }
 
     /// Prints a chain of operators of the loosest precedence in `e`: on one
-    /// line if it fits, otherwise broken after each operator with one operand
+    /// line if it fits, otherwise broken before each operator with one operand
     /// per line (L3, L4), or for `$` and `@`, with as many operands per line
     /// as fit (L5).
     fn layout_operators(
@@ -1374,21 +1410,22 @@ impl<'a> Printer<'a> {
             let last = i == operands.len() - 1;
             let after = if last { suffix } else { verbs[i].1.len() + 1 };
             if i > 0 {
-                let width = self.expression(operand).chars().count() + 1 + after;
+                let verb = &verbs[i - 1].1;
+                let width = verb.len() + 1 + self.expression(operand).chars().count() + after;
                 let room = fill
                     && self
                         .comments_in(operand.span.start..self.code_end(operand.span.end))
                         .is_none();
-                if !must_break && (self.flat || (room && self.fits(width))) {
+                if !must_break && (self.flat || (room && self.fits(width + 1))) {
                     self.put(" ");
                 } else {
                     self.break_line(level, " ");
                 }
+                self.put(verb);
+                self.put(" ");
             }
             self.layout(operand, after, level);
             if !last {
-                self.put(" ");
-                self.put(&verbs[i].1);
                 let end = self.code_end(operand.span.end);
                 must_break = self.gap_comments(end, operands[i + 1].span.start, true);
             }
@@ -1826,7 +1863,7 @@ fn chain(e: &AstNode<Expression>) -> Option<(&AstNode<Expression>, Vec<Call<'_>>
 
 /// A comment's text, without trailing whitespace on any of its lines.
 fn comment_text(src: &str, c: &Range<usize>) -> String {
-    src[c.clone()]
+    super::spaced_comment(&src[c.clone()])
         .split('\n')
         .map(str::trim_end)
         .collect::<Vec<_>>()

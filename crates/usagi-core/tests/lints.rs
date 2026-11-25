@@ -1649,7 +1649,10 @@ fn unused_suppression() {
         lints(&body("// usagi: ignore[S003]\n\nA = A;")),
         vec!["R016", "S003"]
     );
-    assert_eq!(lints(&body("// usagi: ignore-file[R001]")), vec!["R016"]);
+    assert_eq!(
+        lints(&body("F();\n// usagi: ignore-file[R001]")),
+        vec!["R016"]
+    );
     // Suppressing a lint that the selection leaves out still counts.
     let mut result = parse_program(&body("A = A; // usagi: ignore[S003]")).unwrap();
     LintSelection::new(["R"], []).retain(&mut result.errors);
@@ -1668,7 +1671,7 @@ fn unused_suppression() {
     assert_eq!(&source[e.span.start..e.span.end], "R001");
     assert_eq!(e.span.line, Some(9));
     assert_eq!(e.message, "`R001` suppresses nothing here");
-    let result = parse_program(&body("// usagi: ignore-file[R001]")).unwrap();
+    let result = parse_program(&body("F();\n// usagi: ignore-file[R001]")).unwrap();
     assert_eq!(
         result.errors[0].message,
         "`R001` suppresses nothing in this file"
@@ -1770,6 +1773,58 @@ fn invalid_suppression() {
 }
 
 #[test]
+fn empty_function_body() {
+    let class = |function: &str| format!("class Foo extends Object;\n{}\n", function);
+    for function in [
+        "function F() {}",
+        "function int F(int A) {}",
+        "function F() { ; }",
+        "simulated event F() {}",
+        "state S { function F() {} }",
+        "function F() { /* stub */ }",
+    ] {
+        assert_eq!(
+            only(&["R018"], &class(function)),
+            vec!["R018"],
+            "{}",
+            function
+        );
+    }
+    for function in [
+        "function F();",
+        "function F() { F(); }",
+        "function F() { local int A; }",
+        "function F() { return; }",
+    ] {
+        assert_eq!(
+            only(&["R018"], &class(function)),
+            Vec::<&str>::new(),
+            "{}",
+            function
+        );
+    }
+    assert_fix(
+        "R018",
+        "class Foo extends Object;\nfunction AddSystemMenu(){}\n",
+        "class Foo extends Object;\nfunction AddSystemMenu();\n",
+    );
+    assert_fix(
+        "R018",
+        "class Foo extends Object;\nfunction int F()\n{\n}\n",
+        "class Foo extends Object;\nfunction int F();\n",
+    );
+    // No fix when it would lose a comment.
+    let source = "class Foo extends Object;\nfunction F()\n{\n    // stub\n}\n";
+    let result = parse_program(source).unwrap();
+    let error = result
+        .errors
+        .iter()
+        .find(|e| e.lint.is_some_and(|l| l.code() == "R018"))
+        .unwrap();
+    assert!(error.fix.is_none());
+}
+
+#[test]
 fn redundant_default_return() {
     let class = |function: &str| format!("class Foo extends Object;\n{}\n", function);
     for function in [
@@ -1787,13 +1842,24 @@ fn redundant_default_return() {
         "function rotator F() { return rot(0,0,0); }",
         "simulated event int F(int A) { return 0; }",
         "state S { function int F() { return 0; } }",
+        "function F() { return; }",
+        "simulated function F(int A) { return; }",
+        "state S { function F() { return; } }",
     ] {
-        assert_eq!(only(&["R017"], &class(function)), vec!["R017"], "{}", function);
+        assert_eq!(
+            only(&["R017"], &class(function)),
+            vec!["R017"],
+            "{}",
+            function
+        );
     }
     for function in [
         "function int F() { return 1; }",
-        "function F() { return; }",
         "function int F();",
+        "function F();",
+        "function F() {}",
+        "function F() { F(); return; }",
+        "function int F() { return; }",
         "function float F() { return -0.0; }",
         "function bool F() { return True; }",
         "function string F() { return \"A\"; }",
@@ -1823,6 +1889,11 @@ fn redundant_default_return() {
         "R017",
         "class Foo extends Object;\nfunction bool F(int A) { return false; }\n",
         "class Foo extends Object;\nfunction bool F(int A);\n",
+    );
+    assert_fix(
+        "R017",
+        "class Foo extends Object;\nsimulated function F()\n{\n    return;\n}\n",
+        "class Foo extends Object;\nsimulated function F();\n",
     );
     // No fix when it would lose a comment.
     let source = "class Foo extends Object;\nfunction int F()\n{\n    return 0; // stub\n}\n";
