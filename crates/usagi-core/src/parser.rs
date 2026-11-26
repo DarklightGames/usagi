@@ -244,6 +244,27 @@ fn parse_target(nodes: &[Node]) -> Result<Box<AstNode<Expression>>> {
     }
 }
 
+/// Negates `operand`, which a `-` (written with `span`) precedes, if it's a
+/// number with no sign of its own: `- 1` is the literal `-1`, as the one
+/// written without a space is, so that the two are the same program. A
+/// literal that is negative already (`- -1`) is left alone.
+fn negate_literal(operand: &mut AstNode<Expression>, span: AstSpan) {
+    let Expression::Literal(literal) = &mut operand.data else {
+        return;
+    };
+    let Literal::Numeric(number) = &mut literal.data else {
+        return;
+    };
+    number.data = match number.data {
+        NumericLiteral::Integer(i) if i >= 0 => NumericLiteral::Integer(-i),
+        NumericLiteral::Float(f) if f.is_sign_positive() => NumericLiteral::Float(-f),
+        _ => return,
+    };
+    number.span = span;
+    literal.span = span;
+    operand.span = span;
+}
+
 fn parse_expression_from_nodes(nodes: &[Node]) -> Result<Box<AstNode<Expression>>> {
     let mut dyadic_verbs = Vec::new();
     for (index, node) in nodes.iter().enumerate() {
@@ -275,12 +296,18 @@ fn parse_expression_from_nodes(nodes: &[Node]) -> Result<Box<AstNode<Expression>
     // expression. A postfix operator binds more tightly than a prefix one:
     // `!A++` is `!(A++)`.
     if let Rule::monadic_pre_verb = nodes.first().unwrap().as_rule() {
+        let span = AstSpan::from(nodes);
+        let verb = MonadicVerb::from_str(nodes.first().unwrap().as_str()).unwrap();
+        let mut operand = parse_expression_from_nodes(&nodes[1..])?;
+        if verb == MonadicVerb::Negate {
+            negate_literal(&mut operand, span);
+            if matches!(operand.data, Expression::Literal(_)) && operand.span.start == span.start {
+                return Ok(operand);
+            }
+        }
         return Ok(Box::new(AstNode {
-            span: AstSpan::from(nodes),
-            data: Expression::MonadicPreExpression {
-                verb: MonadicVerb::from_str(nodes.first().unwrap().as_str()).unwrap(),
-                operand: parse_expression_from_nodes(&nodes[1..])?,
-            },
+            span,
+            data: Expression::MonadicPreExpression { verb, operand },
         }));
     }
     if let Rule::monadic_post_verb = nodes.last().unwrap().as_rule() {
