@@ -606,6 +606,16 @@ fn r49_r50_literals() {
 }
 
 #[test]
+fn r49_a_sign_apart_from_its_number() {
+    // `- 1` is the literal `-1`; a sign on a sign, or on a name, stays.
+    assert_code(
+        "if (I == - 1) X = - 1.5 + - 0x2 - -  3 + - -4 + -Y + - (1);",
+        "if (I == -1)\n{\n    X = -1.5 + -0x2 - -3 + - -4 + -Y + -(1);\n}",
+    );
+    assert_code("X = - none;", "X = -none;");
+}
+
+#[test]
 fn r51_r52_strings_names_vectors_and_rotators() {
     assert_code(
         "X = \"A  b\" $ 'Some Name' $ VECT( 1,2 ,3 ) $ Rot(1, 2, 3);",
