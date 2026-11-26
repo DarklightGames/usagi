@@ -7,12 +7,13 @@
 //! class's parents, so a class whose parent isn't in the project is never
 //! reported for what it might inherit.
 
+use crate::ast::Identifier;
 use crate::lint::Lint;
 use crate::parser::ProgramError;
 use crate::project::Declaration;
 use crate::project::{ClassId, Lookup, Project};
 use crate::suppression::Suppressions;
-use crate::symbols::{Namespace, Operand, SymbolId, SymbolKind};
+use crate::symbols::{Namespace, Operand, SymbolId};
 use crate::typing;
 use crate::{LineIndex, source};
 use std::collections::HashSet;
@@ -129,40 +130,31 @@ fn non_exhaustive_switches(project: &Project, class: ClassId, errors: &mut Vec<P
 }
 
 /// The value of `enum_` that a `case` label is, if it is one: `Value` or
-/// `Enum.Value`.
+/// `Enum.Value`. A bare `Value` is looked for among the enum's own values, not
+/// through the class's parents: the enum may be declared in a class that this
+/// one only depends on (`dependson`), whose enum values UCC finds all the same.
 fn enum_value(
     project: &Project,
     class: ClassId,
     enum_: Declaration,
     label: &Operand,
 ) -> Option<SymbolId> {
-    let value = match label {
-        Operand::Name(name) => {
-            let value = project.lookup(class, Namespace::Value, name).found()?;
-            match project.symbol(value).kind {
-                SymbolKind::EnumValue { enum_: of, .. } if of == enum_.symbol => value,
-                _ => return None,
-            }
-        }
+    let table = project.table(enum_.class);
+    let named = |name: &Identifier| {
+        project
+            .enum_values(enum_)
+            .into_iter()
+            .find(|&value| table.symbol(value).name == *name)
+    };
+    match label {
+        Operand::Name(name) => named(name),
         Operand::Member(owner, name) => {
             let Operand::Name(owner) = owner.as_ref() else {
                 return None;
             };
             let written = project.resolve_type(class, owner).found()?;
-            if written != enum_ {
-                return None;
-            }
-            let table = project.table(enum_.class);
-            let value = project
-                .enum_values(enum_)
-                .into_iter()
-                .find(|&v| table.symbol(v).name == *name)?;
-            Declaration {
-                class: enum_.class,
-                symbol: value,
-            }
+            (written == enum_).then(|| named(name)).flatten()
         }
-        _ => return None,
-    };
-    (value.class == enum_.class).then_some(value.symbol)
+        _ => None,
+    }
 }

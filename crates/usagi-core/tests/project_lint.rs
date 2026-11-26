@@ -378,10 +378,18 @@ fn enums_declared_in_other_classes() {
     // The enum is in a class that neither extends the other.
     let shapes = "class Shapes extends Object;\nenum EShape { S_Round, S_Square };\n";
     let user = "class User extends Object;\nvar Shapes.EShape Shape;\nfunction F()\n{\n    switch (Shape)\n    {\n        case S_Round:\n    }\n}\n";
-    // The type is written `Shapes.EShape`, the label by its bare name, which
-    // `User` can't see (it doesn't extend `Shapes`): what the label is isn't
-    // known, so nothing is said.
-    assert_eq!(switches(&[COLORS, shapes, user]), []);
+    // The type is written `Shapes.EShape`, and `User` doesn't extend
+    // `Shapes`: the labels are still its values (UCC finds them, as it does
+    // for a class that only `dependson`s the one with the enum).
+    assert_eq!(
+        switches(&[COLORS, shapes, user]),
+        [(
+            5,
+            "`switch` on `EShape` has no `default` and doesn't handle `S_Square`".to_string()
+        )]
+    );
+    let qualified = user.replace("case S_Round:", "case Shapes.EShape.S_Round:");
+    assert_eq!(switches(&[COLORS, shapes, &qualified]), []);
     // A subclass of the one declaring the enum sees it.
     let child = "class Child extends Shapes;\nvar EShape Shape;\nfunction F()\n{\n    switch (Shape)\n    {\n        case S_Round:\n    }\n}\n";
     assert_eq!(
@@ -419,4 +427,30 @@ fn a_switch_can_be_suppressed_by_naming_it() {
             .collect::<Vec<_>>(),
         [8, 10]
     );
+}
+
+#[test]
+fn an_enum_of_a_struct_of_a_class_the_switching_class_only_depends_on() {
+    // `var struct Error { var EKind Type; } Last;` in a class that is not a
+    // parent, a local of the struct written `Maker.Error`, and labels that
+    // are the enum's values, as in the construction menus of a game.
+    let maker = "class Maker extends Object;\n\
+        enum EKind { K_None, K_Busy, K_Full, K_Dead };\n\
+        var struct Error\n{\n    var EKind Type;\n    var string Text;\n} Last;\n";
+    let menu = "class Menu extends Object\n    dependson(Maker);\n\
+        function F()\n{\n    local Maker.Error E;\n\
+        \x20   switch (E.Type)\n    {\n        case K_Busy:\n            break;\n        case K_Full:\n            break;\n    }\n}\n";
+    assert_eq!(
+        switches(&[COLORS, maker, menu]),
+        [(
+            6,
+            "`switch` on `EKind` has no `default` and doesn't handle `K_None`, `K_Dead`"
+                .to_string()
+        )]
+    );
+    let covered = menu.replace(
+        "case K_Full:",
+        "case K_Full:\n        case K_None:\n        case K_Dead:",
+    );
+    assert_eq!(switches(&[COLORS, maker, &covered]), []);
 }
