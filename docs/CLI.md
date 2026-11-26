@@ -45,7 +45,7 @@ recovered from are also shown, under the code `parse`.
 | `--ignore LINT,...` | Don't report these lints, in addition to the configured ones. |
 | `--format FORMAT` | How to print problems (see below). |
 | `--statistics` | Print the number of problems and files for each lint, then a summary of the project's classes (see below). |
-| `--no-project` | Don't index the project's classes (see below). |
+| `--no-project` | Don't index the project's classes, which turns off the lints that need it (see below). |
 | `--fix` | Apply safe fixes to the files, then report the problems that are left. |
 | `--diff` | Print the changes `--fix` would make, as a unified diff, without changing any file. On a terminal (see `--color`), removed lines are red, added lines green, hunk headers cyan and file headers bold. |
 | `--add-ignore[=STYLE]` | Suppress the reported lint problems by writing `// usagi: ignore[...]` comments (see below), then exit with 0. `STYLE` is `name` (the default) or `code`; it must be attached with `=`. Can't be combined with `--fix` or `--diff`. |
@@ -85,8 +85,20 @@ A file's package is the folder that holds its `Classes` folder
 (`<Package>/Classes/<Class>.uc`); a file elsewhere has none, and stands in for
 a class of any package.
 
-`--no-project` skips the index (and its summary); it takes memory for the
-symbol tables of every file, and time to build. Nothing else uses it yet.
+The index is also built when a lint that looks at other classes is selected
+(`C017 undeclared-default-property`). Those lints are **opt-in**: only a
+selector that names one, by its code or its name, selects it, so `ALL`, `C` and
+`correctness` don't. Select one with `--select C017` or `--extend-select C017`,
+or `extend-select = ["C017"]` in `usagi.toml` (also in a `lint.per-path` entry).
+They report a name only when every parent of the class is in the project, so
+a class that extends one that isn't is never reported for what it may inherit.
+
+The project is the `.uc` files under the paths given, so linting one folder
+doesn't find the classes its files extend in another: give both
+(`usagi lint --select C017 Mod Core`), or the folder that holds them.
+
+`--no-project` skips the index (and its summary) and the lints that need it;
+it takes memory for the symbol tables of every file, and time to build.
 
 A lint selector is `ALL`, a code (`S003`), a code prefix (`S`, `S00`), a
 lint name (`self-assignment`) or a category name (`suspicious`), all

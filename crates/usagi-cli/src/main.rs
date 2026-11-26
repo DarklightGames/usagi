@@ -84,14 +84,7 @@ fn run(cli: Cli) -> Result<bool, String> {
             };
             let settings = settings(&config, &args.files, cli.jobs, overrides, &cwd)?;
             if let Some(style) = args.add_ignore {
-                let reports = check_files(
-                    &args.files.paths,
-                    &settings,
-                    Checking::Lint {
-                        fix: false,
-                        project: false,
-                    },
-                )?;
+                let (reports, _) = lint_files(args, &settings, false)?;
                 let style = match style {
                     cli::IgnoreStyle::Name => suppress::Style::Name,
                     cli::IgnoreStyle::Code => suppress::Style::Code,
@@ -107,26 +100,7 @@ fn run(cli: Cli) -> Result<bool, String> {
                 return Ok(true);
             }
             let fixing = args.fix || args.diff;
-            // Only `--statistics` uses the index for now; the lints that
-            // look at other classes will too.
-            let project = args.statistics && !args.no_project;
-            let mut reports = check_files(
-                &args.files.paths,
-                &settings,
-                Checking::Lint {
-                    fix: fixing,
-                    project,
-                },
-            )?;
-            // The files that `include` and `exclude` skip are part of the
-            // project, whose classes extend them.
-            let project = if project {
-                let others = discover::unselected(&paths_or_cwd(&args.files.paths), &settings);
-                let others = check::index_all(&others, settings.jobs)?;
-                Some(project::build(&mut reports, others, &args.files.paths))
-            } else {
-                None
-            };
+            let (reports, project) = lint_files(args, &settings, fixing)?;
             let mut out = io::stdout().lock();
             let fixed: usize = reports.iter().map(|r| r.fixed).sum();
             let fixed_files = reports.iter().filter(|r| r.fixed > 0).count();
@@ -380,6 +354,46 @@ fn settings(
     Settings::new(config, overrides, cwd).map_err(|ConfigError(e)| e)
 }
 
+/// Lints every file, and indexes the project's classes when something needs
+/// them: `--statistics`, or a lint that looks at other classes. Those lints
+/// run on the index, and their problems are added to the files' reports.
+fn lint_files(
+    args: &cli::LintArgs,
+    settings: &Settings,
+    fix: bool,
+) -> Result<(Vec<FileReport>, Option<usagi_core::project::Project>), String> {
+    let project_lints = settings.project_lints_enabled();
+    let index = !args.no_project && (args.statistics || project_lints);
+    let mut reports = check_files(
+        &args.files.paths,
+        settings,
+        Checking::Lint {
+            fix,
+            project: index,
+        },
+    )?;
+    if !index {
+        return Ok((reports, None));
+    }
+    // The files that `include` and `exclude` skip are part of the project,
+    // whose classes extend them.
+    let others = discover::unselected(&paths_or_cwd(&args.files.paths), settings);
+    let others = check::index_all(&others, settings.jobs)?;
+    let project = project::build(&mut reports, others, &args.files.paths);
+    if project_lints {
+        project::add_lints(&mut reports, &project, &enabled_in(settings));
+    }
+    Ok((reports, Some(project)))
+}
+
+/// Whether a lint is reported for a file, by the settings.
+fn enabled_in(settings: &Settings) -> impl Fn(&Path, Lint) -> bool + Sync + '_ {
+    move |path, lint| {
+        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        settings.is_enabled(&absolute, lint)
+    }
+}
+
 /// `paths`, or the current directory if there are none.
 fn paths_or_cwd(paths: &[PathBuf]) -> Vec<PathBuf> {
     if paths.is_empty() {
@@ -418,10 +432,7 @@ fn check_files(
     if let Some(error) = errors.first() {
         return Err(error.clone());
     }
-    let is_enabled = |path: &Path, lint: Lint| {
-        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-        settings.is_enabled(&absolute, lint)
-    };
+    let is_enabled = enabled_in(settings);
     let options = CheckOptions {
         strict: settings.strict,
         lint,

@@ -286,6 +286,16 @@ pub struct SymbolTable {
     references_by_symbol: Vec<Vec<usize>>,
     /// The scope of each function and state, by the start of its name.
     scopes_by_declaration: HashMap<usize, ScopeId>,
+    /// The properties `defaultproperties` assigns that the class doesn't
+    /// declare, which a parent class may.
+    unresolved_defaults: Vec<UnresolvedName>,
+}
+
+/// A name that a file uses but doesn't declare.
+#[derive(Debug, Clone)]
+pub struct UnresolvedName {
+    pub name: Identifier,
+    pub span: AstSpan,
 }
 
 impl SymbolTable {
@@ -298,6 +308,7 @@ impl SymbolTable {
             references: Vec::new(),
             references_by_symbol: Vec::new(),
             scopes_by_declaration: HashMap::new(),
+            unresolved_defaults: Vec::new(),
         };
         table.add_scope(ScopeKind::Class, None);
         table.declare_program(program);
@@ -383,6 +394,12 @@ impl SymbolTable {
             scope = s.parent;
         }
         None
+    }
+
+    /// The properties assigned in `defaultproperties` that the class doesn't
+    /// declare, in order. A parent class may declare them.
+    pub fn unresolved_default_properties(&self) -> &[UnresolvedName] {
+        &self.unresolved_defaults
     }
 
     /// Every resolved reference, sorted by position.
@@ -913,6 +930,10 @@ impl Resolver<'_> {
                     data: Identifier::new(&a.name),
                     span,
                 };
+                let declared = self
+                    .table
+                    .lookup(ScopeId::CLASS, Namespace::Value, &name.data)
+                    .is_some();
                 self.refer(
                     ScopeId::CLASS,
                     &[Namespace::Value],
@@ -920,6 +941,12 @@ impl Resolver<'_> {
                     span,
                     ReferenceKind::DefaultProperty,
                 );
+                if !declared {
+                    self.table.unresolved_defaults.push(UnresolvedName {
+                        name: name.data,
+                        span,
+                    });
+                }
             }
         }
     }

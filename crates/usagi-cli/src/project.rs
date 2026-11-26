@@ -1,12 +1,12 @@
 //! The index of a project's classes, built from the files that were linted.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use usagi_core::{Origin, Parent, Problem, Project, SymbolTable};
+use usagi_core::{ClassId, Lint, Origin, Parent, Problem, Project, SymbolTable, project_lint};
 
-use crate::check::FileReport;
+use crate::check::{self, FileReport};
 use crate::discover;
 
 /// Indexes the classes of `reports`, taking their symbol tables, and of
@@ -57,6 +57,28 @@ fn package_of(path: &Path) -> Option<String> {
     })?;
     let package = folders.get(classes.checked_sub(1)?)?;
     Some(package.as_os_str().to_string_lossy().into_owned())
+}
+
+/// Runs the lints that look at other classes (see
+/// [`usagi_core::project_lint`]) on every class, and adds what they find to
+/// the reports of their files. A lint is reported for a file where
+/// `is_enabled` says so.
+pub fn add_lints(
+    reports: &mut [FileReport],
+    project: &Project,
+    is_enabled: &dyn Fn(&Path, Lint) -> bool,
+) {
+    let classes: HashMap<&Path, ClassId> = project
+        .classes()
+        .map(|class| (project.origin(class).path.as_path(), class))
+        .collect();
+    for report in reports {
+        let Some(&class) = classes.get(report.path.as_path()) else {
+            continue;
+        };
+        let errors = project_lint::lint(project, class, &report.source);
+        check::add_project_errors(report, &errors, is_enabled);
+    }
 }
 
 /// Prints how many classes there are, which extend a class that isn't in

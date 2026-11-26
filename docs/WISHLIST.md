@@ -31,12 +31,10 @@ See [PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md) for the design.
 * A non-`Actor` `Object` that holds references to `Actor`s.
 * Exhaustive `switch` checking for enums declared in other classes.
 * A `config` variable in a class that isn't `config` anywhere in its hierarchy.
-* A `defaultproperties` key that isn't declared anywhere in the hierarchy.
 * `simulated` outside an `Actor` subclass.
 * Argument types checked against function signatures, e.g. a string passed to
   `GotoState`.
-* A function that overrides nothing (a misspelled `PostBeginPlay`), and an
-  override whose signature differs from the original.
+* An override whose signature differs from the original.
 * An unresolved class in `extends`, `class'X'` or `Spawn`.
 * A class that uses one from a package later in `EditPackages`, and cycles
   between packages.

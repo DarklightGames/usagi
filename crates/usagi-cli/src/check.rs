@@ -130,6 +130,35 @@ pub struct CheckOptions<'a> {
     pub jobs: usize,
 }
 
+/// Adds the problems of the lints that look at other classes, which are
+/// found once the project is indexed, to the report of their file.
+pub fn add_project_errors(
+    report: &mut FileReport,
+    errors: &[ProgramError],
+    is_enabled: &dyn Fn(&Path, Lint) -> bool,
+) {
+    let index = LineIndex::new(&report.source);
+    for error in errors {
+        let Some(lint) = error.lint else { continue };
+        if !is_enabled(&report.path, lint) {
+            continue;
+        }
+        let mut problem = Problem::new(
+            Kind::Lint(lint),
+            error.message.clone(),
+            &report.source,
+            &index,
+            error.span.start,
+            error.span.end,
+        );
+        problem.is_error = error.severity == ProgramErrorSeverity::Error;
+        report.problems.push(problem);
+    }
+    report
+        .problems
+        .sort_by_key(|p| (p.start, p.end, p.kind.code()));
+}
+
 pub fn check_file(path: &Path, options: &CheckOptions) -> FileReport {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,

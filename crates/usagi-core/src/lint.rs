@@ -116,6 +116,17 @@ macro_rules! lints {
                 match self { $(Lint::$variant => $summary,)+ }
             }
 
+            /// Whether the lint looks at other classes (see
+            /// [`crate::project`]), and is checked by [`crate::project_lint`]
+            /// once the project is indexed, not while parsing a file.
+            ///
+            /// Such a lint is opt-in: only a selector that names it, by its
+            /// code or its name, selects it. `ALL`, a prefix of its code
+            /// and its category don't.
+            pub fn needs_project(self) -> bool {
+                matches!(self, Lint::UndeclaredDefaultProperty)
+            }
+
             /// Looks a lint up by its code or name (case-insensitive).
             pub fn find(s: &str) -> Option<Lint> {
                 Lint::ALL.iter().copied().find(|l| {
@@ -158,6 +169,8 @@ lints! {
         "`return X;` in a function with no return type, or `return;` in one with a return type."),
     ClassNameMismatch = ("C016", "class-name-mismatch", Correctness, Error, Never,
         "The class name differs from the name of its `.uc` file."),
+    UndeclaredDefaultProperty = ("C017", "undeclared-default-property", Correctness, Warning, Never,
+        "A `defaultproperties` property that no class in the hierarchy declares. Opt-in."),
 
     // Suspicious
     EmptyBody = ("S001", "empty-body", Suspicious, Warning, Never,
@@ -317,6 +330,10 @@ impl LintSelection {
 
 pub(crate) fn selector_matches(selector: &str, lint: Lint) -> bool {
     let selector = selector.trim();
+    if lint.needs_project() {
+        return selector.eq_ignore_ascii_case(lint.code())
+            || selector.eq_ignore_ascii_case(lint.name());
+    }
     selector.eq_ignore_ascii_case("ALL")
         || (!selector.is_empty()
             && lint
@@ -364,6 +381,18 @@ mod tests {
         assert!(s.is_enabled(Lint::EmptyStatement));
 
         assert!(LintSelection::default().is_enabled(Lint::SelfAssignment));
+        // A lint that needs the project is selected only by naming it.
+        let opt_in = Lint::UndeclaredDefaultProperty;
+        assert!(opt_in.needs_project() && !Lint::SelfAssignment.needs_project());
+        for selector in ["ALL", "C", "C01", "correctness"] {
+            assert!(!LintSelection::new([selector], []).is_enabled(opt_in));
+        }
+        assert!(!LintSelection::default().is_enabled(opt_in));
+        for selector in ["C017", "c017", "undeclared-default-property"] {
+            assert!(LintSelection::new(["ALL", selector], []).is_enabled(opt_in));
+            assert!(!LintSelection::new(["ALL", selector], [selector]).is_enabled(opt_in));
+            assert!(LintSelection::is_valid_selector(selector));
+        }
         assert!(LintSelection::is_valid_selector("s00"));
         assert!(!LintSelection::is_valid_selector("Z"));
     }

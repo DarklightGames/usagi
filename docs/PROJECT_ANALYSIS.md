@@ -13,7 +13,7 @@ per-file tables, so that unknown names can become known.
 
 ## Status
 
-Done (steps 0 to 3 of [Order of work](#order-of-work)):
+Done (steps 0 to 4b of [Order of work](#order-of-work)):
 
 - `usagi_pkg::Packages` is `Send + Sync` (`Arc` and locks in place of `Rc` and
   `RefCell`); threads that race to read a package get the same `Arc`.
@@ -21,10 +21,16 @@ Done (steps 0 to 3 of [Order of work](#order-of-work)):
   coverage from `tests/project.rs`.
 - `usagi lint --statistics` builds the index and prints a summary (see
   [CLI.md](CLI.md#the-projects-classes)); `--no-project` skips it.
+- The first lint that uses it: C017 `undeclared-default-property` (step 4b),
+  opt-in (see [Lints](#lints-this-allows)). It runs from `usagi_core::
+  project_lint`, on data the symbol table kept while it was built: the
+  `defaultproperties` keys it couldn't resolve in the class. The lint needs
+  neither the AST nor a second parse, which is why the visitor doesn't take a
+  `Project`: a project lint is a function of the index. A lint that needs more
+  than the table keeps will have the table keep it, the same way.
 
-Not yet: the visitor doesn't take a `Project` (no lint needs one yet; step 4),
-packages as a source of declarations (step 5), `graph` and the dependency lints
-(step 6), and typing (step 7).
+Not yet: other project lints, packages as a source of declarations (step 5),
+`graph` and the dependency lints (step 6), and typing (step 7).
 
 On a real tree (Red Orchestra and Darkest Hour: 7,551 classes, 12 cores):
 
@@ -121,18 +127,19 @@ Unreadable or absent packages make their classes missing, not wrong.
 
 ### 4. Plumbing
 
-- The lint visitor gets an optional `&Project`. Absent, behaviour is as
-  today. (Not yet: with no lint to use it, it would be a field nothing reads.)
+- Project lints don't go through the visitor. Each is a function of the
+  [`Project`] (`project_lint::check`), over what the table kept, so a lint
+  that needs the project doesn't re-parse the file. They're opt-in: only a
+  selector that names one selects it (`Lint::needs_project`). `lint::`
+  applies the file's suppression comments, which only a selector naming the
+  lint suppresses, and parsing doesn't report such a selector as unused.
 - `usagi lint` keeps the symbol table of each file it checks, and builds the
   index afterwards (done, behind `--statistics` until a lint needs it). The
   index covers every file under the paths, also those `include` and `exclude`
   keep out of the lint (read only for their classes), since a linted class
   extends them. A lint
-  that needs the project can't run in that first pass: it re-parses the files
-  it applies to, with the index (a cheap check says which; most files have
-  nothing for a given lint). Keeping every AST for a second pass instead would
-  cost far more memory than parsing again costs time. `--no-project` keeps the
-  old behaviour. It also needs a way to say where
+  that needs the project can't run in that first pass; it runs on the index
+  after it. `--no-project` keeps the old behaviour. It also needs a way to say where
   the game's packages are (the `Paths` in `pkg/game.rs`) and the order of
   source roots.
 - Suppression comments, `--fix` and `--diff` are unchanged.
@@ -157,10 +164,9 @@ First step, hierarchy and enums:
 
 - Non-exhaustive `switch` on an enum, for enums declared in any class in
   the hierarchy or elsewhere (extends the per-file lint on the wishlist).
-- A function that overrides nothing, by a near-miss of an inherited name
-  (`PostBeginplay`'s kind of typo). Only when the whole chain is known.
+- A `defaultproperties` key not declared anywhere in the hierarchy (C017;
+  done). A delegate is declared as a function, so it counts.
 - An override with a different signature from the one it overrides.
-- A `defaultproperties` key not declared anywhere in the hierarchy.
 - A redundant `defaultproperties` value equal to the parent's.
 - A `config` variable that isn't `config` anywhere in its hierarchy.
 - `simulated` outside an `Actor` subclass.
@@ -279,10 +285,11 @@ Corpus timings are too noisy on shared CI runners to gate on.
    duplicates. *Done.*
 2. `lookup` through the hierarchy, and `resolve_type`. *Done.*
 3. `Project` plumbing in `lint`, with `--no-project`, interning names.
-   *Done, except the visitor taking a `Project` (with the first lint).*
-4. The first lints: non-exhaustive `switch`, override that overrides
-   nothing, undeclared `defaultproperties` key. Each run on the corpus with
-   its hits read through, as for any lint.
+   *Done. Project lints don't go through the visitor (see above).*
+4. The first lints, each run on the corpus with its hits read through, as for
+   any lint: undeclared `defaultproperties` key (*done*, C017); then
+   `usagi graph` (step 6, brought forward); then, with the minimal typing
+   it needs, non-exhaustive `switch`.
 5. `DeclarationSource` and the packages implementation; then the stock
    classes resolve and the "chain ends in a missing parent" cases shrink.
 6. `usagi graph`, then the dependency lints.

@@ -4,6 +4,7 @@ pub mod format;
 pub mod lint;
 pub mod parser;
 pub mod project;
+pub mod project_lint;
 pub mod source;
 pub mod suppression;
 pub mod symbols;

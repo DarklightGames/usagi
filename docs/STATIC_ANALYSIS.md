@@ -45,6 +45,24 @@ usagi lint --format tsv --statistics <root> > lints.tsv
 
 `--statistics` prints the number of problems and files for each lint.
 
+### Lints that look at other classes
+
+A lint that needs the classes of the whole project (see
+[PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md)) is **opt-in**: only a selector
+that names it, by its code or its name, selects it. `ALL`, a code prefix and a
+category don't. They're marked "needs the project" in the list below.
+
+```sh
+usagi lint --extend-select C017 <root>
+```
+
+They run once every class under the paths is indexed, including the files
+that `include` and `exclude` skip, and `--no-project` turns them off. A
+lint reports a name only when the class's whole chain of parents is in the
+project: a class that extends one that isn't is never reported for what it
+may inherit. In the library, [`usagi_core::project_lint`] runs them on a
+[`Project`](usagi_core::Project); `parse_program` doesn't.
+
 ## Suppression comments
 
 A comment that starts with `usagi:` suppresses lints in the code itself:
@@ -88,7 +106,11 @@ brackets) or a selector that matches no lint is reported as S017
 
 C016 `class-name-mismatch` is checked by `check_file_name`, after parsing,
 which applies the suppressions too. Until it's called, a selector suppressing
-only C016 is reported as unused.
+only C016 is reported as unused. The lints that need the project are checked
+by `project_lint::lint`, which applies them too; a selector that names one is
+never reported as unused, because parsing can't tell. Such a lint is
+suppressed only by a selector that names it, as it's selected: `ignore[ALL]`
+and `ignore[correctness]` don't suppress it.
 
 ## Fixes
 
@@ -129,6 +151,7 @@ never applied from the command line; they are for an editor to offer.
 | C014 | `undeclared-replicated-member` | Error |  | A member in the replication block that isn't declared in the class itself. UE2 only lets a class replicate its own members. |
 | C015 | `return-form-mismatch` | Error |  | `return X;` in a function with no return type, or a bare `return;` in a function that has one. |
 | C016 | `class-name-mismatch` | Error |  | A class whose name differs from its file's name (without `.uc`), ignoring case. UCC rejects it. Only checked when linting files, since it needs the file name. |
+| C017 | `undeclared-default-property` | Warning |  | A property assigned in `defaultproperties` that the class doesn't declare, or any class it extends. Needs the project, and is opt-in. Only reported when every parent of the class is in the project. `Begin Object` blocks aren't checked, and neither are names that are declared but aren't variables (a `const`, an enum value). |
 
 ### Suspicious
 

@@ -344,6 +344,133 @@ fn the_project_includes_files_that_are_not_linted() {
         .stdout(predicate::str::contains("project:").not());
 }
 
+const BASE: &str = "class Object;\nvar int Flags;\ndelegate OnTick();\n";
+const PAWN: &str = "class Pawn extends Object;\nvar int Own;\n\
+    defaultproperties\n{\n    Own=1\n    flags=2\n    OnTick=Foo.Bar\n    Typo=3\n}\n";
+
+#[test]
+fn undeclared_default_properties_are_opt_in() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", BASE),
+        ("Mod/Classes/Pawn.uc", PAWN),
+    ]);
+    let found =
+        "Mod/Classes/Pawn.uc:8:5: C017 `Typo` isn't declared in `Pawn` or any class it extends\n";
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        (
+            String::from_utf8(output.stdout).unwrap(),
+            output.status.code(),
+        )
+    };
+    // Not by default, or by `ALL`, a prefix or a category.
+    for selectors in [
+        &[][..],
+        &["--select", "ALL"],
+        &["--select", "C"],
+        &["--select", "correctness"],
+    ] {
+        assert_eq!(run(selectors), (String::new(), Some(0)), "{:?}", selectors);
+    }
+    // By its code or its name.
+    for selector in ["C017", "undeclared-default-property"] {
+        assert_eq!(run(&["--select", selector]), (found.to_string(), Some(1)));
+        assert_eq!(
+            run(&["--extend-select", selector]),
+            (found.to_string(), Some(1))
+        );
+    }
+    assert_eq!(
+        run(&["--select", "C017", "--no-project"]),
+        (String::new(), Some(0))
+    );
+    assert_eq!(
+        run(&["--select", "C017", "--ignore", "C017"]),
+        (String::new(), Some(0))
+    );
+    // The project is the files under the paths. `Mod` alone has no `Object`,
+    // so what `Pawn` may inherit is unknown; with `Core` too, it's known.
+    assert_eq!(run(&["--select", "C017", "Mod"]), (String::new(), Some(0)));
+    assert_eq!(run(&["--select", "C017", "Core"]), (String::new(), Some(0)));
+    assert_eq!(run(&["--select", "C017", "Mod", "Core"]).0, found);
+}
+
+#[test]
+fn undeclared_default_properties_by_configuration() {
+    let dir = project(&[
+        (
+            "usagi.toml",
+            "include = [\"Mod/*\"]\n[lint]\nextend-select = [\"C017\"]\n",
+        ),
+        ("Core/Classes/Object.uc", BASE),
+        ("Mod/Classes/Pawn.uc", PAWN),
+    ]);
+    // The parent is in a file that isn't linted, and is found all the same.
+    usagi(dir.path())
+        .args(["lint", "--format", "concise"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("Pawn.uc:8:5: C017 `Typo`"))
+        .stdout(predicate::str::contains("Flags").not())
+        .stdout(predicate::str::contains("OnTick").not());
+    let dir = project(&[
+        (
+            "usagi.toml",
+            "[[lint.per-path]]\npaths = [\"Mod/**\"]\nextend-select = [\"C017\"]\n",
+        ),
+        ("Core/Classes/Object.uc", BASE),
+        ("Mod/Classes/Pawn.uc", PAWN),
+    ]);
+    usagi(dir.path())
+        .args(["lint", "--format", "concise"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("Pawn.uc:8:5: C017 `Typo`"));
+}
+
+#[test]
+fn a_class_whose_parent_is_missing_is_not_reported() {
+    let dir = project(&[("Mod/Classes/Pawn.uc", &PAWN.replace("Object", "Elsewhere"))]);
+    usagi(dir.path())
+        .args(["lint", "--select", "C017"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn add_ignore_suppresses_a_lint_that_needs_the_project() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", BASE),
+        ("Mod/Classes/Pawn.uc", PAWN),
+    ]);
+    usagi(dir.path())
+        .args(["lint", "--select", "C017", "--add-ignore"])
+        .assert()
+        .code(0);
+    let text = fs::read_to_string(dir.path().join("Mod/Classes/Pawn.uc")).unwrap();
+    assert!(
+        text.contains("    // usagi: ignore[undeclared-default-property]\n    Typo=3"),
+        "{}",
+        text
+    );
+    // It's suppressed, and the comment isn't reported as unused.
+    usagi(dir.path())
+        .args(["lint", "--select", "C017,R016"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty());
+    usagi(dir.path())
+        .args(["lint", "--select", "R016"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty());
+}
+
 #[test]
 fn parse_ast() {
     let dir = project(&[("Bar.uc", CLEAN)]);
