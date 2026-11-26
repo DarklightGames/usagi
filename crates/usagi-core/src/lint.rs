@@ -126,7 +126,9 @@ macro_rules! lints {
             pub fn needs_project(self) -> bool {
                 matches!(
                     self,
-                    Lint::UndeclaredDefaultProperty | Lint::NonExhaustiveSwitch
+                    Lint::UndeclaredDefaultProperty
+                        | Lint::NonExhaustiveSwitch
+                        | Lint::CouldBeStatic
                 )
             }
 
@@ -212,6 +214,8 @@ lints! {
         "A `usagi:` suppression comment that is malformed or names no lint."),
     NonExhaustiveSwitch = ("S018", "non-exhaustive-switch", Suspicious, Warning, Never,
         "A `switch` on an enum with no `default` that doesn't handle every value. Opt-in."),
+    CouldBeStatic = ("S019", "could-be-static", Suspicious, Warning, Never,
+        "A function that uses nothing of the object it's called on and could be `static`. Opt-in."),
     // Performance
     ActorIteratorInPerFrameFunction = ("P001", "actor-iterator-in-per-frame-function", Performance, Warning, Never,
         "`foreach AllActors`/`DynamicActors` in a function called every frame, such as `Tick`."),

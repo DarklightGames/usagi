@@ -454,3 +454,76 @@ fn an_enum_of_a_struct_of_a_class_the_switching_class_only_depends_on() {
     );
     assert_eq!(switches(&[COLORS, maker, &covered]), []);
 }
+
+// S019 could-be-static.
+
+/// The names of the functions in the last source that could be static.
+fn statics(sources: &[&str]) -> Vec<String> {
+    let p = project(sources);
+    let last = sources.last().unwrap();
+    let class = p.classes().last().unwrap();
+    project_lint::lint(&p, class, last)
+        .into_iter()
+        .filter(|e| e.lint == Some(Lint::CouldBeStatic))
+        .map(|e| last[e.span.start..e.span.end].to_string())
+        .collect()
+}
+
+const BASE: &str = "class Base extends Object;\n\
+    var int Count;\n\
+    const LIMIT = 3;\n\
+    static function int Twice(int X) { return X * 2; }\n\
+    function Touch() {}\n\
+    function Virtual() {}\n\
+    event Hook() {}\n\
+    native function Nat();\n";
+
+#[test]
+fn functions_that_use_no_object() {
+    let child = "class Child extends Base;\n\
+        var int Own;\n\
+        function Pure(int A) { local int L; L = A + LIMIT; return; }\n\
+        function CallsStatic(int A) { Twice(A); Default.Count = 1; Static.Twice(1); }\n\
+        function UsesOwn() { Own = 1; }\n\
+        function UsesInherited() { Count = 1; }\n\
+        function ReadsInherited(int A) { A = Count; }\n\
+        function CallsInstance() { Touch(); }\n\
+        function CallsSelf() { Self.Touch(); }\n\
+        function UsesSelf() { Foo(Self); }\n\
+        function CallsSuper() { Super.Virtual(); }\n\
+        function Virtual() {}\n\
+        function UnknownName() { Mystery(); }\n\
+        function Pure2() { Pure(1); }\n\
+        static function AlreadyStatic() {}\n\
+        event Fired() {}\n\
+        exec function Console() {}\n\
+        native function Nat2();\n\
+        function Foo(Object O) {}\n\
+        function Assigned() {}\n\
+        function Setup() { Handler = Assigned; }\n\
+        var delegate Handler;\n\
+        delegate OnX() {}\n\
+        state S { function InState() {} }\n";
+    assert_eq!(
+        statics(&[OBJECT, BASE, child]),
+        ["Pure", "CallsStatic", "UnknownName", "Foo"]
+    );
+}
+
+#[test]
+fn could_be_static_needs_the_whole_chain() {
+    // The parent isn't in the project: `Mystery` might be an inherited variable.
+    let orphan = "class Orphan extends Missing;\nfunction F() { Mystery(); }\n";
+    assert!(statics(&[OBJECT, orphan]).is_empty());
+    // An overridden function can't change its signature, nor can the one it overrides.
+    let parent = "class P extends Object;\nfunction F() {}\nfunction G() {}\n";
+    let child = "class C extends P;\nfunction F() {}\n";
+    assert_eq!(statics(&[OBJECT, parent, child]), Vec::<String>::new());
+    assert_eq!(statics(&[OBJECT, parent]), ["F", "G"]);
+    // A replicated function needs an object.
+    let net = "class N extends Object;\nreplication { reliable if (Role == ROLE_Authority) F; }\nfunction F() {}\n";
+    assert!(statics(&[OBJECT, net]).is_empty());
+    // A suppression comment works as for other project lints.
+    let quiet = "class Q extends Object;\n// usagi: ignore[S019]\nfunction F() {}\n";
+    assert!(statics(&[OBJECT, quiet]).is_empty());
+}

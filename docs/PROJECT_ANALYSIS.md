@@ -29,6 +29,9 @@ Done (steps 0 to 4, the graph of 6 and the first typing of 7, of [Order of work]
   `Project`: a project lint is a function of the index. A lint that needs more
   than the table keeps will have the table keep it, the same way.
 
+- S019 `could-be-static`, from the names function bodies use that the file
+  doesn't declare (`SymbolTable::unresolved_uses`) and the instance members
+  they use that it does (`SymbolTable::instance_use`).
 - Minimal typing, and the lint that needed it: S018 `non-exhaustive-switch`,
   opt-in (steps 4d and 7, in part). The symbol table records each `switch`
   (its subject and `case` labels as `Operand`s, names that can be looked up

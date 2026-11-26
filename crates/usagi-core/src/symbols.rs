@@ -350,6 +350,12 @@ pub struct SymbolTable {
     /// The properties `defaultproperties` assigns that the class doesn't
     /// declare, which a parent class may.
     unresolved_defaults: Vec<UnresolvedName>,
+    /// The names used in function bodies and states that the file doesn't
+    /// declare, which a parent class may.
+    unresolved_uses: Vec<UnresolvedUse>,
+    /// Where each function first uses a variable or non-static function that
+    /// the file declares.
+    instance_uses: HashMap<ScopeId, AstSpan>,
     switches: Vec<SwitchRecord>,
 }
 
@@ -358,6 +364,23 @@ pub struct SymbolTable {
 pub struct UnresolvedName {
     pub name: Identifier,
     pub span: AstSpan,
+}
+
+/// A name used in code that the file doesn't declare (and so may be inherited
+/// or declared in another class).
+#[derive(Debug, Clone)]
+pub struct UnresolvedUse {
+    pub name: Identifier,
+    pub span: AstSpan,
+    /// The scope it's used in: a function's or a state's.
+    pub scope: ScopeId,
+    /// The namespaces it could be found in, in order.
+    pub namespaces: Vec<Namespace>,
+    /// How it's used: `Read`, `Write` or `Call`.
+    pub kind: ReferenceKind,
+    /// Whether it needs an object: false for `Default.X` and `Static.F()`,
+    /// which a `static` function may use.
+    pub instance: bool,
 }
 
 impl SymbolTable {
@@ -371,6 +394,8 @@ impl SymbolTable {
             references_by_symbol: Vec::new(),
             scopes_by_declaration: HashMap::new(),
             unresolved_defaults: Vec::new(),
+            unresolved_uses: Vec::new(),
+            instance_uses: HashMap::new(),
             switches: Vec::new(),
         };
         table.add_scope(ScopeKind::Class, None);
@@ -463,6 +488,19 @@ impl SymbolTable {
     /// declare, in order. A parent class may declare them.
     pub fn unresolved_default_properties(&self) -> &[UnresolvedName] {
         &self.unresolved_defaults
+    }
+
+    /// The names used in code that the file doesn't declare, in order. A
+    /// parent class may declare them.
+    pub fn unresolved_uses(&self) -> &[UnresolvedUse] {
+        &self.unresolved_uses
+    }
+
+    /// Where the function with scope `scope` first uses an instance variable
+    /// or calls a non-static function that the file declares, if it does.
+    /// Names the file doesn't declare are in [`Self::unresolved_uses`].
+    pub fn instance_use(&self, scope: ScopeId) -> Option<AstSpan> {
+        self.instance_uses.get(&scope).copied()
     }
 
     /// The `switch` statements, in order.
@@ -866,15 +904,57 @@ impl Resolver<'_> {
         span: AstSpan,
         kind: ReferenceKind,
     ) {
+        self.refer_as(scope, namespaces, name, span, kind, true)
+    }
+
+    /// [`Self::refer`], saying whether the name needs an object (`instance`)
+    /// when it isn't found.
+    fn refer_as(
+        &mut self,
+        scope: ScopeId,
+        namespaces: &[Namespace],
+        name: &AstNode<Identifier>,
+        span: AstSpan,
+        kind: ReferenceKind,
+        instance: bool,
+    ) {
         let found = namespaces
             .iter()
             .find_map(|&ns| self.table.lookup(scope, ns, name));
         if let Some(symbol) = found {
+            if instance
+                && matches!(
+                    kind,
+                    ReferenceKind::Read | ReferenceKind::Write | ReferenceKind::Call
+                )
+                && matches!(self.table.scope(self.scope).kind, ScopeKind::Function(_))
+                && match &self.table.symbol(symbol).kind {
+                    SymbolKind::Variable { .. } => true,
+                    SymbolKind::Function { modifiers, .. } => {
+                        !modifiers.contains(&FunctionModifierType::Static)
+                    }
+                    _ => false,
+                }
+            {
+                self.table.instance_uses.entry(self.scope).or_insert(span);
+            }
             self.table.references.push(Reference {
                 symbol,
                 span,
                 text: name.string.clone(),
                 kind,
+            });
+        } else if matches!(
+            kind,
+            ReferenceKind::Read | ReferenceKind::Write | ReferenceKind::Call
+        ) {
+            self.table.unresolved_uses.push(UnresolvedUse {
+                name: name.data.clone(),
+                span,
+                scope: self.scope,
+                namespaces: namespaces.to_vec(),
+                kind,
+                instance,
             });
         }
     }
@@ -1162,12 +1242,13 @@ impl Resolver<'_> {
             Expression::DefaultAccess { operand, target }
                 if operand.as_ref().is_none_or(|o| is_self(o)) =>
             {
-                self.refer(
+                self.refer_as(
                     ScopeId::CLASS,
                     &[Namespace::Value],
                     target,
                     target.span,
                     ReferenceKind::Write,
+                    false,
                 );
                 true
             }
@@ -1187,12 +1268,13 @@ impl Resolver<'_> {
             Expression::StaticAccess {
                 operand: None,
                 target,
-            } => self.refer(
+            } => self.refer_as(
                 ScopeId::CLASS,
                 &[Namespace::Function],
                 target,
                 target.span,
                 ReferenceKind::Call,
+                false,
             ),
             _ => self.expression(operand),
         }
@@ -1337,22 +1419,24 @@ impl Resolver<'_> {
             }
             Expression::DefaultAccess { operand, target } => match operand {
                 Some(operand) if !is_self(operand) => self.expression(operand),
-                _ => self.refer(
+                _ => self.refer_as(
                     ScopeId::CLASS,
                     &[Namespace::Value],
                     target,
                     target.span,
                     ReferenceKind::Read,
+                    false,
                 ),
             },
             Expression::StaticAccess { operand, target } => match operand {
                 Some(operand) => self.expression(operand),
-                None => self.refer(
+                None => self.refer_as(
                     ScopeId::CLASS,
                     &[Namespace::Function],
                     target,
                     target.span,
                     ReferenceKind::Read,
+                    false,
                 ),
             },
             Expression::MemberAccess { operand, target } => {

@@ -435,6 +435,31 @@ fn non_exhaustive_switches_are_opt_in() {
 }
 
 #[test]
+fn could_be_static_is_opt_in() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", "class Object;\nvar int Count;\n"),
+        (
+            "Mod/Classes/Pawn.uc",
+            "class Pawn extends Object;\nfunction Pure(int A) { A++; }\nfunction Impure() { Count = 1; }\n",
+        ),
+    ]);
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert_eq!(run(&["--select", "ALL"]), "");
+    assert_eq!(
+        run(&["--select", "S019"]),
+        "Mod/Classes/Pawn.uc:2:10: S019 `Pure` doesn't use the object it's called on, and could be `static`\n"
+    );
+    assert_eq!(run(&["--select", "S019", "--no-project"]), "");
+}
+
+#[test]
 fn undeclared_default_properties_by_configuration() {
     let dir = project(&[
         (

@@ -22,4 +22,6 @@ pub use parser::{
 pub use project::{ClassId, Declaration, Lookup, Origin, Parent, Problem, Project};
 pub use source::{Decoded, LineIndex, SourceEncoding, decode, decode_source, encode};
 pub use suppression::Suppressions;
-pub use symbols::{Reference, ReferenceKind, Symbol, SymbolKind, SymbolTable};
+pub use symbols::{
+    Reference, ReferenceKind, Symbol, SymbolKind, SymbolTable, UnresolvedName, UnresolvedUse,
+};

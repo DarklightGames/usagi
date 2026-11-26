@@ -348,3 +348,41 @@ fn labels_and_state_transitions() {
         other => panic!("{:?}", other),
     }
 }
+
+#[test]
+fn unresolved_uses_in_bodies() {
+    let source = "class A extends B;\n\
+        var int Mine;\n\
+        function F(int Arg) {\n\
+            local int L;\n\
+            Mine = L + Arg + Inherited;\n\
+            Self.Other = 1;\n\
+            Helper();\n\
+            Global.Up();\n\
+            Default.Base = 2;\n\
+            Static.Util();\n\
+            Label: Goto('Label');\n\
+        }\n\
+        state S { Begin: Goto('Begin'); }\n";
+    let t = table(source);
+    let uses: Vec<(String, ReferenceKind, bool)> = t
+        .unresolved_uses()
+        .iter()
+        .map(|u| (u.name.as_str().to_string(), u.kind, u.instance))
+        .collect();
+    assert_eq!(
+        uses,
+        vec![
+            ("Inherited".to_string(), ReferenceKind::Read, true),
+            ("Other".to_string(), ReferenceKind::Write, true),
+            ("Helper".to_string(), ReferenceKind::Call, true),
+            ("Up".to_string(), ReferenceKind::Call, true),
+            ("Base".to_string(), ReferenceKind::Write, false),
+            ("Util".to_string(), ReferenceKind::Call, false),
+            ("Goto".to_string(), ReferenceKind::Call, true),
+            ("Goto".to_string(), ReferenceKind::Call, true),
+        ]
+    );
+    let f = scope_named(&t, source, "function ", "F");
+    assert!(t.unresolved_uses()[..6].iter().all(|u| u.scope == f));
+}
