@@ -471,6 +471,241 @@ fn add_ignore_suppresses_a_lint_that_needs_the_project() {
         .stdout(predicate::str::is_empty());
 }
 
+/// Classes in four packages, with one that extends a class that isn't there
+/// and two that extend each other.
+fn graph_project() -> TempDir {
+    project(&[
+        ("Core/Classes/Object.uc", "class Object;\n"),
+        ("Engine/Classes/Actor.uc", "class Actor extends Object;\n"),
+        ("Engine/Classes/Pawn.uc", "class Pawn extends Actor;\n"),
+        ("Mod/Classes/Hero.uc", "class Hero extends Pawn;\n"),
+        ("Mod/Classes/Boss.uc", "class Boss extends Hero;\n"),
+        ("Mod/Classes/Lost.uc", "class Lost extends Gone.Away;\n"),
+        ("Other/Classes/Helper.uc", "class Helper extends Actor;\n"),
+        ("Other/Classes/Cycle.uc", "class Cycle extends Cycle2;\n"),
+        ("Other/Classes/Cycle2.uc", "class Cycle2 extends Cycle;\n"),
+    ])
+}
+
+fn graph(dir: &Path, args: &[&str]) -> String {
+    let output = usagi(dir).arg("graph").args(args).output().unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn graph_draws_the_hierarchy_as_a_tree() {
+    let dir = graph_project();
+    assert_eq!(
+        graph(dir.path(), &[]),
+        "Cycle [Other] (extends itself, through its parents)\n\
+         Cycle2 [Other] (extends itself, through its parents)\n\
+         Gone.Away (not in the project)\n\
+         └── Lost [Mod]\n\
+         Object [Core]\n\
+         └── Actor [Engine]\n\
+         \x20   ├── Helper [Other]\n\
+         \x20   └── Pawn [Engine]\n\
+         \x20       └── Hero [Mod]\n\
+         \x20           └── Boss [Mod]\n"
+    );
+}
+
+#[test]
+fn graph_chooses_classes_and_how_far_to_go() {
+    let dir = graph_project();
+    let tree = |args: &[&str]| graph(dir.path(), args);
+    // Ancestors and descendants, unless one is asked for.
+    let both = "Object [Core]\n└── Actor [Engine]\n    └── Pawn [Engine]\n        └── Hero [Mod]\n            └── Boss [Mod]\n";
+    assert_eq!(tree(&["--class", "hero"]), both);
+    assert_eq!(tree(&["--class", "Mod.Hero"]), both);
+    assert_eq!(
+        tree(&["--class", "Hero", "--ancestors", "--descendants"]),
+        both
+    );
+    assert_eq!(
+        tree(&["--class", "Hero", "--ancestors"]),
+        "Object [Core]\n└── Actor [Engine]\n    └── Pawn [Engine]\n        └── Hero [Mod]\n"
+    );
+    assert_eq!(
+        tree(&["--class", "Hero", "--descendants"]),
+        "Hero [Mod]\n└── Boss [Mod]\n"
+    );
+    assert_eq!(
+        tree(&["--class", "Hero", "--depth", "1"]),
+        "Pawn [Engine]\n└── Hero [Mod]\n    └── Boss [Mod]\n"
+    );
+    // Several, and what's missing is shown.
+    assert_eq!(
+        tree(&["--class", "Boss,Lost", "--depth", "1"]),
+        "Gone.Away (not in the project)\n└── Lost [Mod]\nHero [Mod]\n└── Boss [Mod]\n"
+    );
+    // Only what's under the paths: `Pawn` isn't, and is missing.
+    assert_eq!(
+        graph(dir.path(), &["Mod"]),
+        "Gone.Away (not in the project)\n└── Lost [Mod]\nPawn (not in the project)\n└── Hero [Mod]\n    └── Boss [Mod]\n"
+    );
+    for args in [&["--class", "Nothing"][..], &["--class", "Mod.Nothing"]] {
+        usagi(dir.path())
+            .arg("graph")
+            .args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("no class named"));
+    }
+    for flag in ["--ancestors", "--descendants", "--depth=1"] {
+        usagi(dir.path()).args(["graph", flag]).assert().code(2);
+    }
+}
+
+#[test]
+fn graph_as_dot_and_mermaid() {
+    let dir = graph_project();
+    assert_eq!(
+        graph(
+            dir.path(),
+            &["--class", "Hero", "--descendants", "--format", "dot"]
+        ),
+        "digraph classes {\n\
+         \x20   rankdir=BT;\n\
+         \x20   node [shape=box, fontname=\"Helvetica\"];\n\
+         \x20   edge [arrowhead=empty];\n\
+         \x20   subgraph cluster_0 {\n\
+         \x20       label=\"Mod\";\n\
+         \x20       n0 [label=\"Boss\"];\n\
+         \x20       n1 [label=\"Hero\"];\n\
+         \x20   }\n\
+         \x20   n0 -> n1;\n\
+         }\n"
+    );
+    assert_eq!(
+        graph(dir.path(), &["--class", "Lost,Cycle", "--format", "dot"]),
+        "digraph classes {\n\
+         \x20   rankdir=BT;\n\
+         \x20   node [shape=box, fontname=\"Helvetica\"];\n\
+         \x20   edge [arrowhead=empty];\n\
+         \x20   subgraph cluster_0 {\n\
+         \x20       label=\"Mod\";\n\
+         \x20       n2 [label=\"Lost\"];\n\
+         \x20   }\n\
+         \x20   subgraph cluster_1 {\n\
+         \x20       label=\"Other\";\n\
+         \x20       n0 [label=\"Cycle\", color=red];\n\
+         \x20   }\n\
+         \x20   n1 [label=\"Gone.Away\", style=dashed];\n\
+         \x20   n2 -> n1;\n\
+         }\n"
+    );
+    assert_eq!(
+        graph(
+            dir.path(),
+            &["--class", "Lost,Cycle", "--format", "mermaid"]
+        ),
+        "flowchart BT\n\
+         \x20   subgraph p0[\"Mod\"]\n\
+         \x20       n2[\"Lost\"]\n\
+         \x20   end\n\
+         \x20   subgraph p1[\"Other\"]\n\
+         \x20       n0[\"Cycle\"]:::cycle\n\
+         \x20   end\n\
+         \x20   n1[\"Gone.Away\"]:::missing\n\
+         \x20   n2 --> n1\n\
+         \x20   classDef missing stroke-dasharray: 5 5\n\
+         \x20   classDef cycle stroke:red\n"
+    );
+}
+
+#[test]
+fn graph_as_json() {
+    let dir = graph_project();
+    let value: serde_json::Value =
+        serde_json::from_str(&graph(dir.path(), &["--class", "Lost", "--format", "json"])).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "nodes": [
+                {"id": 0, "kind": "missing", "name": "Gone.Away", "package": null, "path": null, "cycle": false},
+                {"id": 1, "kind": "class", "name": "Lost", "package": "Mod", "path": "Mod/Classes/Lost.uc", "cycle": false},
+            ],
+            "edges": [{"from": 1, "to": 0, "count": 1}],
+        })
+    );
+}
+
+#[test]
+fn graph_of_packages() {
+    let dir = graph_project();
+    assert_eq!(
+        graph(dir.path(), &["--packages"]),
+        "Core\nEngine -> Core (1)\nMod -> Engine (1)\nOther -> Engine (1)\n"
+    );
+    // Of the classes chosen: the cut ones don't depend on the others.
+    assert_eq!(
+        graph(
+            dir.path(),
+            &[
+                "--packages",
+                "--class",
+                "Boss",
+                "--ancestors",
+                "--depth",
+                "2"
+            ]
+        ),
+        "Engine\nMod -> Engine (1)\n"
+    );
+    assert_eq!(
+        graph(
+            dir.path(),
+            &["--packages", "--class", "Hero", "--format", "dot"]
+        ),
+        "digraph packages {\n\
+         \x20   rankdir=BT;\n\
+         \x20   node [shape=box, fontname=\"Helvetica\"];\n\
+         \x20   n0 [label=\"Core\"];\n\
+         \x20   n1 [label=\"Engine\"];\n\
+         \x20   n2 [label=\"Mod\"];\n\
+         \x20   n1 -> n0 [label=\"1\"];\n\
+         \x20   n2 -> n1 [label=\"1\"];\n\
+         }\n"
+    );
+    assert_eq!(
+        graph(
+            dir.path(),
+            &["--packages", "--class", "Hero", "--format", "mermaid"]
+        ),
+        "flowchart BT\n\
+         \x20   n0[\"Core\"]\n\
+         \x20   n1[\"Engine\"]\n\
+         \x20   n2[\"Mod\"]\n\
+         \x20   n1 -->|1| n0\n\
+         \x20   n2 -->|1| n1\n"
+    );
+    let value: serde_json::Value = serde_json::from_str(&graph(
+        dir.path(),
+        &["--packages", "--class", "Pawn", "--format", "json"],
+    ))
+    .unwrap();
+    assert_eq!(value["nodes"][0]["kind"], "package");
+    assert_eq!(value["edges"][0]["count"], 1);
+}
+
+#[test]
+fn graph_ignores_include_and_exclude() {
+    let dir = graph_project();
+    fs::write(
+        dir.path().join("usagi.toml"),
+        "include = [\"Mod/*\"]\nexclude = [\"Core/*\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        graph(dir.path(), &["--class", "Boss", "--ancestors"])
+            .lines()
+            .count(),
+        5
+    );
+}
+
 #[test]
 fn parse_ast() {
     let dir = project(&[("Bar.uc", CLEAN)]);

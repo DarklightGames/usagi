@@ -19,6 +19,7 @@ usagi pkg obj Textures/UI.utx "Texture'UI.HUD.*'" --property Format,LODSet
 | [`lint`](#usagi-lint-paths) | Parse files and report lint problems; apply fixes. |
 | [`parse`](#usagi-parse-paths) | Parse files and report syntax errors. |
 | [`lint rule`](#usagi-lint-rule-codename--usagi-lint-rule---all) | Explain a lint, or list every lint. |
+| [`graph`](#usagi-graph-paths) | Draw the class hierarchy, or how packages depend on each other. |
 | [`build`](#usagi-build) | Compile a mod's out-of-date packages with UCC. |
 | [`pkg list`](#usagi-pkg-list-path) | Show a package file's summary, dependencies, imports and exports. |
 | [`pkg flags`](#usagi-pkg-flags-paths) | Show or change package files' flags. |
@@ -156,6 +157,38 @@ Parses each file and reports syntax errors and recovered problems.
 | `--ast` | Print each file's syntax tree. |
 | `--statistics` | Print how many files had each outcome: `ok`, `recovered`, `strict_error`, `syntax_error`, `panic` or `io_error`. |
 | `--format`, `--include`, `--exclude` | As for `lint`. |
+
+### `usagi graph [PATHS]...`
+
+Draws the project's classes, each joined to the class it extends, or its
+packages. The project is every `.uc` file under the paths (the current
+directory with none), whatever `include` and `exclude` say: the graph needs the
+classes the others extend (see
+[The project's classes](#the-projects-classes)). A class's package is the
+folder that holds its `Classes` folder. Classes of one name in different
+packages are different classes: write `Package.Class` to say which.
+
+With no `--class`, it draws every class, which is thousands in a game; give
+one to see a part of it.
+
+| Flag | Meaning |
+|---|---|
+| `--class CLASS,...` | Draw these classes and their ancestors and descendants, in place of every class. `CLASS` is `Name` or `Package.Class`, in any case. Can be repeated. A class that isn't in the project is an error. |
+| `--ancestors` | With `--class`: only the classes they extend. |
+| `--descendants` | With `--class`: only the classes that extend them. With neither flag, both. |
+| `--depth N` | With `--class`: go at most `N` levels up and down. |
+| `--packages` | Draw packages in place of classes: an edge from one to another for the classes of the first that extend classes of the second, with how many (the packages of the chosen classes, if there are any). Classes with no package aren't drawn. |
+| `--format FORMAT` | How to draw it (see below). |
+
+| Format | Is |
+|---|---|
+| `tree` (default) | Each class under the one it extends, as `Name [Package]`. A class that extends one that isn't in the project is under it, as `Name (not in the project)`; classes that extend each other in a circle are marked. With `--packages`, a line for each package: `Package -> Dependency (classes), ...`. |
+| `dot` | [Graphviz](https://graphviz.org/): `usagi graph --class Pawn --format dot \| dot -Tsvg -o pawn.svg`. A box for each class, in a cluster for each package, and an arrow from a class to the one it extends; missing parents are dashed, and classes in a circle are red. |
+| `mermaid` | A Mermaid `flowchart`, which GitHub draws in Markdown, in the same way. |
+| `json` | `{"nodes": [...], "edges": [...]}`: each node has an `id`, a `kind` (`class`, `missing` or `package`), `name`, `package`, `path` (relative to the current directory when it's inside it) and `cycle`; each edge goes `from` the extending class (or the package that depends) `to` the other, `count` times (1 for classes). |
+
+A graph of every class is large for `dot`: choose a class, or use `tree` and
+`grep`.
 
 ### `usagi format [PATHS]...`
 

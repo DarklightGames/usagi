@@ -42,8 +42,8 @@ See [PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md) for the design.
 
 ### Needs a project-wide symbol table: commands
 
-* `usagi graph`: class hierarchy and package dependencies as DOT, Mermaid
-  or JSON.
+* Package dependencies beyond `extends` in `usagi graph`: what a class
+  refers to (`class'X'`, struct and enum types, `Spawn`), once there's typing.
 * `usagi refs`: who overrides, calls, extends or refers to a class or
   member.
 * Check `EditPackages` order before running UCC, and rebuild only the

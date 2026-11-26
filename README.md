@@ -110,6 +110,7 @@ usagi build --clean     # rebuild everything
   [`usagi build`](docs/CLI.md#usagi-build), [locked packages](docs/CLI.md#locked-packages)
   and [mod configuration](docs/CLI.md#mod-configuration)
 - [Lints](docs/STATIC_ANALYSIS.md) — what usagi checks and how to choose which lints run
+- [Project analysis](docs/PROJECT_ANALYSIS.md) — how usagi indexes classes across a project, for `usagi graph` and the lints that look at other classes
 - [Legacy code](docs/PERMISSIVE_PARSING.md) — how usagi handles code that relies on old compiler leniency
 
 ## License

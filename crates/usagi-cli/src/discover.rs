@@ -22,8 +22,14 @@ pub fn files(paths: &[PathBuf], settings: &Settings) -> (Vec<PathBuf>, Vec<Strin
 pub fn unselected(paths: &[PathBuf], settings: &Settings) -> Vec<PathBuf> {
     let (selected, _) = files(paths, settings);
     let selected: HashSet<PathBuf> = selected.into_iter().collect();
-    let (all, _) = find(paths, &|_| true);
+    let (all, _) = all(paths);
     all.into_iter().filter(|f| !selected.contains(f)).collect()
+}
+
+/// Every `.uc` file under `paths`, sorted and without duplicates, whatever the
+/// include and exclude globs say.
+pub fn all(paths: &[PathBuf]) -> (Vec<PathBuf>, Vec<String>) {
+    find(paths, &|_| true)
 }
 
 fn find(paths: &[PathBuf], selected: &dyn Fn(&Path) -> bool) -> (Vec<PathBuf>, Vec<String>) {

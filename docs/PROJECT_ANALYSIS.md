@@ -13,7 +13,7 @@ per-file tables, so that unknown names can become known.
 
 ## Status
 
-Done (steps 0 to 4b of [Order of work](#order-of-work)):
+Done (steps 0 to 4b, and the graph of 6, of [Order of work](#order-of-work)):
 
 - `usagi_pkg::Packages` is `Send + Sync` (`Arc` and locks in place of `Rc` and
   `RefCell`); threads that race to read a package get the same `Arc`.
@@ -28,6 +28,12 @@ Done (steps 0 to 4b of [Order of work](#order-of-work)):
   neither the AST nor a second parse, which is why the visitor doesn't take a
   `Project`: a project lint is a function of the index. A lint that needs more
   than the table keeps will have the table keep it, the same way.
+
+- `usagi graph` (step 6, brought forward): the class hierarchy and the
+  package dependencies (an extends from one package to another), as a tree,
+  Graphviz DOT, a Mermaid flowchart or JSON, with `--class`, `--ancestors`,
+  `--descendants` and `--depth` to cut a readable part out of thousands of
+  classes (see [CLI.md](CLI.md#usagi-graph-paths)).
 
 Not yet: other project lints, packages as a source of declarations (step 5),
 `graph` and the dependency lints (step 6), and typing (step 7).
@@ -192,9 +198,10 @@ Dependencies:
 
 ## Commands this allows
 
-- `usagi graph`: the class hierarchy or the package dependencies, as DOT,
-  Mermaid or JSON, optionally from one class (its ancestors, descendants, or
-  both) and with a depth.
+- `usagi graph` (done): the class hierarchy or the package dependencies, as a
+  tree, DOT, Mermaid or JSON, optionally from one class (its ancestors,
+  descendants, or both) and with a depth. Package dependencies are `extends`
+  only so far: what a class refers to (`class'X'`, types) comes with typing.
 - `usagi refs <Class[.Member]>`: who overrides, calls, extends or refers to
   it. The base for a safe rename.
 - `usagi build`: use the dependency order to check `EditPackages` before
@@ -288,7 +295,7 @@ Corpus timings are too noisy on shared CI runners to gate on.
    *Done. Project lints don't go through the visitor (see above).*
 4. The first lints, each run on the corpus with its hits read through, as for
    any lint: undeclared `defaultproperties` key (*done*, C017); then
-   `usagi graph` (step 6, brought forward); then, with the minimal typing
+   `usagi graph` (step 6, brought forward; *done*); then, with the minimal typing
    it needs, non-exhaustive `switch`.
 5. `DeclarationSource` and the packages implementation; then the stock
    classes resolve and the "chain ends in a missing parent" cases shrink.

@@ -6,6 +6,7 @@ mod cli;
 mod config;
 mod discover;
 mod format;
+mod graph;
 mod output;
 mod pkg;
 mod project;
@@ -160,6 +161,27 @@ fn run(cli: Cli) -> Result<bool, String> {
                         .iter()
                         .any(|p| matches!(p.kind, check::Kind::Lint(_)))
             }))
+        }
+        Command::Graph(args) => {
+            let paths = paths_or_cwd(&args.paths);
+            let (files, errors) = discover::all(&paths);
+            if let Some(error) = errors.first() {
+                return Err(error.clone());
+            }
+            let jobs = cli.jobs.map_or_else(config::default_jobs, usize::from);
+            let tables = check::index_all(&files, jobs)?;
+            let project = project::build(&mut [], tables, &paths);
+            let options = graph::Options {
+                classes: args.class.clone(),
+                ancestors: args.ancestors,
+                descendants: args.descendants,
+                depth: args.depth,
+                packages: args.packages,
+            };
+            let graph = graph::build(&project, &options, &|path| discover::display(path, &cwd))?;
+            graph::write(&mut io::stdout().lock(), &graph, args.format)
+                .map_err(|e| e.to_string())?;
+            Ok(true)
         }
         Command::Format(args) => {
             let config = load()?;
