@@ -40,6 +40,9 @@ pub struct FormatConfig {
     pub indent_style: Option<IndentStyle>,
     /// How many spaces one level of indentation is. Default: 4.
     pub indent_width: Option<std::num::NonZeroU8>,
+    /// The most non-empty arguments a call that doesn't fit on its line may
+    /// have to go one per line; one with more is filled. Default: 4.
+    pub max_one_per_line_arguments: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -73,6 +76,9 @@ pub fn format_options(
                 .map_or(defaults.indent, |n| Indent::Spaces(n.get().into())),
         },
         line_width: format.line_width.map_or(defaults.line_width, |n| n.get()),
+        max_one_per_line_arguments: format
+            .max_one_per_line_arguments
+            .unwrap_or(defaults.max_one_per_line_arguments),
     })
 }
 
@@ -194,6 +200,10 @@ pub fn merge_mod(
             line_width: modded.format.line_width.or(root.format.line_width),
             indent_style: modded.format.indent_style.or(root.format.indent_style),
             indent_width: modded.format.indent_width.or(root.format.indent_width),
+            max_one_per_line_arguments: modded
+                .format
+                .max_one_per_line_arguments
+                .or(root.format.max_one_per_line_arguments),
         },
         build: BuildConfig {
             mod_name: Some(mod_name.to_string()),

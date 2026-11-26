@@ -41,6 +41,7 @@ pub(super) fn print(
             Indent::Tabs => 4,
         },
         width: options.line_width,
+        max_one_per_line_arguments: options.max_one_per_line_arguments,
         column: 0,
         line_level: 0,
         flat: false,
@@ -80,6 +81,9 @@ struct Printer<'a> {
     indent_columns: usize,
     /// The longest a line may be.
     width: usize,
+    /// The most non-empty arguments a call may have to be laid out one per
+    /// line (L2).
+    max_one_per_line_arguments: usize,
     /// The column at the end of the last line.
     column: usize,
     /// The indentation level of the last line.
@@ -1486,6 +1490,9 @@ impl<'a> Printer<'a> {
     /// at `close` (L2): on the call's line if they fit there with `suffix`
     /// more columns, and otherwise one per line, each laid out on its own,
     /// followed by a line for the `)`, all one level in from the call's line.
+    /// A call with more than `max_one_per_line_arguments` non-empty arguments
+    /// and no end-of-line comments among them is filled instead: as many per
+    /// line as fit.
     fn layout_arguments(
         &mut self,
         open: usize,
@@ -1518,6 +1525,15 @@ impl<'a> Printer<'a> {
         };
         if items.is_empty() || fits {
             self.layout_list(open, close, &items, suffix, level);
+            return;
+        }
+        let filled = arguments.expressions.iter().flatten().count()
+            > self.max_one_per_line_arguments
+            && self.comments_in(open..close) != Some(usize::MAX);
+        if filled {
+            self.break_line(level, "");
+            self.layout_list(open, close, &items, 0, level);
+            self.break_line(level, "");
             return;
         }
         let mut cursor = open;
@@ -1633,7 +1649,16 @@ impl<'a> Printer<'a> {
         let mut cursor = open;
         for (i, item) in items.iter().enumerate() {
             let last = i == items.len() - 1;
-            let after = if last { suffix } else { 1 };
+            // The commas of the empty slots after this item stay on its line.
+            let empties = items[i + 1..]
+                .iter()
+                .take_while(|item| matches!(item, Item::Empty))
+                .count();
+            let after = if i + empties == items.len() - 1 {
+                empties + suffix
+            } else {
+                empties + 1
+            };
             let flat = match item {
                 Item::Expression(e) => Some((
                     self.expression(e),
@@ -1647,12 +1672,7 @@ impl<'a> Printer<'a> {
             {
                 let width = text.chars().count();
                 let fits_here = comments.is_none() && self.fits(width + 1 + after);
-                // An item that won't fit on a line of its own (with its
-                // comma) either stays here, and breaks inside.
-                let comma = usize::from(!last);
-                let fits_alone =
-                    comments.is_none() && level * self.indent_columns + width + comma <= self.width;
-                if !must_break && (self.flat || fits_here || !fits_alone) {
+                if !must_break && (self.flat || fits_here) {
                     self.put(" ");
                 } else {
                     self.break_line(level, " ");

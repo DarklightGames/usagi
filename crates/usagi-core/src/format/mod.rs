@@ -28,8 +28,11 @@ pub enum Indent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormatOptions {
     pub indent: Indent,
-    /// The longest a line may be. Not used yet.
+    /// The longest a line may be.
     pub line_width: usize,
+    /// The most non-empty arguments a call that doesn't fit on its line may
+    /// have to be laid out one per line; one with more is filled (L2).
+    pub max_one_per_line_arguments: usize,
 }
 
 impl Default for FormatOptions {
@@ -37,6 +40,7 @@ impl Default for FormatOptions {
         FormatOptions {
             indent: Indent::Spaces(4),
             line_width: 120,
+            max_one_per_line_arguments: 4,
         }
     }
 }

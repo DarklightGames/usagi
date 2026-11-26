@@ -8,6 +8,7 @@ mod discover;
 mod format;
 mod output;
 mod pkg;
+mod suppress;
 
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -77,6 +78,22 @@ fn run(cli: Cli) -> Result<bool, String> {
                 ..Overrides::default()
             };
             let settings = settings(&config, &args.files, cli.jobs, overrides, &cwd)?;
+            if let Some(style) = args.add_ignore {
+                let reports = check_files(&args.files.paths, &settings, true, false, false)?;
+                let style = match style {
+                    cli::IgnoreStyle::Name => suppress::Style::Name,
+                    cli::IgnoreStyle::Code => suppress::Style::Code,
+                };
+                let (comments, files) = add_ignores(&reports, style, &cwd)?;
+                eprintln!(
+                    "Added suppression comments for {} {} in {} {}",
+                    comments,
+                    plural(comments, "line"),
+                    files,
+                    plural(files, "file")
+                );
+                return Ok(true);
+            }
             let fixing = args.fix || args.diff;
             let reports = check_files(&args.files.paths, &settings, true, false, fixing)?;
             let mut out = io::stdout().lock();
@@ -273,6 +290,35 @@ fn restore_sigpipe() {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
+}
+
+/// Writes suppression comments for the lint problems in `reports`. Returns
+/// the number of lines suppressed and files changed.
+fn add_ignores(
+    reports: &[FileReport],
+    style: suppress::Style,
+    cwd: &Path,
+) -> Result<(usize, usize), String> {
+    let (mut comments, mut files) = (0, 0);
+    for report in reports {
+        let targets = suppress::targets(report);
+        if targets.is_empty() {
+            continue;
+        }
+        let show = || discover::display(&report.path, cwd);
+        let bytes = std::fs::read(&report.path).map_err(|e| format!("{}: {}", show(), e))?;
+        let decoded = usagi_core::decode_source(&bytes);
+        let (text, count) = suppress::add_ignores(&decoded.text, &targets, style);
+        if count == 0 {
+            continue;
+        }
+        let bytes = usagi_core::encode(&text, decoded.encoding)
+            .ok_or_else(|| format!("{}: can't store the comments in its encoding", show()))?;
+        std::fs::write(&report.path, bytes).map_err(|e| format!("{}: {}", show(), e))?;
+        comments += count;
+        files += 1;
+    }
+    Ok((comments, files))
 }
 
 fn plural(count: usize, word: &str) -> String {

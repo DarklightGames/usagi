@@ -607,6 +607,17 @@ fn format_config() {
         .stderr(predicate::str::contains(
             "format.indent-width doesn't apply to format.indent-style = \"tabs\"",
         ));
+    fs::write(
+        dir.path().join("usagi.toml"),
+        "[format]\nline-width = 25\nindent-width = 2\nmax-one-per-line-arguments = 1\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("Foo.uc"), source).unwrap();
+    usagi(dir.path()).args(["format"]).assert().code(0);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("Foo.uc")).unwrap(),
+        "class Foo extends Object;\n\nfunction F()\n{\n  G(\n    Argument1, Argument2\n    );\n}\n"
+    );
     fs::write(dir.path().join("usagi.toml"), "[format]\nline-width = 0\n").unwrap();
     usagi(dir.path()).args(["format"]).assert().code(2);
 }
@@ -4780,5 +4791,75 @@ fn pkg_obj_t3d_and_toml() {
     assert_eq!(
         toml_as_json(&String::from_utf8(toml).unwrap()),
         without_nulls(serde_json::json!({ "objects": json }))
+    );
+}
+
+#[test]
+fn add_ignore_suppresses_the_selected_lints() {
+    let dir = project(&[
+        (
+            "Foo.uc",
+            "class Foo extends Object;\r\nfunction F(int A)\r\n{\r\n    A = A;\r\n}\r\n",
+        ),
+        ("Bar.uc", CLEAN),
+    ]);
+    usagi(dir.path())
+        .args(["lint", "--select", "S003", "--add-ignore=code"])
+        .assert()
+        .code(0)
+        .stderr(predicate::str::contains(
+            "Added suppression comments for 1 line in 1 file",
+        ));
+    let text = fs::read_to_string(dir.path().join("Foo.uc")).unwrap();
+    assert!(
+        text.contains("{\r\n    // usagi: ignore[S003]\r\n    A = A;"),
+        "{:?}",
+        text
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("Bar.uc")).unwrap(),
+        CLEAN
+    );
+    // Nothing is left to report, and running again changes nothing.
+    usagi(dir.path())
+        .args(["lint", "--select", "S003"])
+        .assert()
+        .code(0);
+    usagi(dir.path())
+        .args(["lint", "--select", "S003", "--add-ignore=code"])
+        .assert()
+        .stderr(predicate::str::contains("for 0 lines in 0 files"));
+}
+
+#[test]
+fn add_ignore_extends_an_existing_comment() {
+    let dir = project(&[(
+        "Foo.uc",
+        "class Foo extends Object;\nfunction F(int A)\n{\n    // usagi: ignore[R008]\n    A = A;\n    // usagi: ignore[S003]\n    A = A;\n}\n",
+    )]);
+    usagi(dir.path())
+        .args(["lint", "--select", "S003", "--add-ignore"])
+        .assert()
+        .code(0);
+    let text = fs::read_to_string(dir.path().join("Foo.uc")).unwrap();
+    assert!(
+        text.contains("// usagi: ignore[R008, self-assignment]\n    A = A;"),
+        "{}",
+        text
+    );
+}
+
+#[test]
+fn add_ignore_names_lints_by_default() {
+    let dir = project(&[("Foo2.uc", "class Foo2 extends Object;\n")]);
+    usagi(dir.path())
+        .args(["lint", "--select", "N007", "--add-ignore", "."])
+        .assert()
+        .code(0);
+    let text = fs::read_to_string(dir.path().join("Foo2.uc")).unwrap();
+    assert!(
+        text.starts_with("// usagi: ignore[class-name-ends-in-digit]\n"),
+        "{}",
+        text
     );
 }

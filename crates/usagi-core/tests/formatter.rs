@@ -764,6 +764,54 @@ fn l2_arguments_one_per_line() {
 }
 
 #[test]
+fn l2_many_arguments_are_filled() {
+    // More than `max_one_per_line_arguments` (4) non-empty arguments are
+    // filled, between a line for the `(` and one for the `)`; empty slots
+    // don't count.
+    assert_code(
+        "PlayInfo.AddSetting(default.MapVoteGroup, \"bDefaultToCurrentGameType\", default.PropsDisplayText[10], 0, 1, \"Check\",,, true, true);",
+        "PlayInfo.AddSetting(\n    default.MapVoteGroup, \"bDefaultToCurrentGameType\", default.PropsDisplayText[10], 0, 1, \"Check\",,, true, true\n    );",
+    );
+    assert_code_width(
+        20,
+        "F(Aaaaaa,,,, Bbbbbb, Cccccc, Dddddd);",
+        "F(\n    Aaaaaa,,,,\n    Bbbbbb,\n    Cccccc,\n    Dddddd\n    );",
+    );
+    // The commas of empty slots count towards an argument's width.
+    assert_code_width(
+        20,
+        "F(A, B, C, D, Eeeeee,,, G);",
+        "F(\n    A, B, C, D,\n    Eeeeee,,, G\n    );",
+    );
+    // An argument that doesn't fit breaks inside, a level further in.
+    assert_code_width(
+        24,
+        "F(A, B, C, D, G(Argument1, Argument2));",
+        "F(\n    A, B, C, D,\n    G(\n        Argument1,\n        Argument2\n        )\n    );",
+    );
+    // Block comments stay among filled arguments; end-of-line comments
+    // keep the arguments one per line.
+    assert_code_width(
+        20,
+        "F(A, B /* b */, C, D, E);\nF(A, // a\n    B, C, D, E);",
+        "F(\n    A, B, /* b */\n    C, D, E\n    );\nF(\n    A, // a\n    B,\n    C,\n    D,\n    E\n    );",
+    );
+    let options = FormatOptions {
+        line_width: 20,
+        max_one_per_line_arguments: 0,
+        ..Default::default()
+    };
+    assert_eq!(
+        format_text(
+            "class A;\nfunction F() { Function(Argument1, Argument2); }\n",
+            &options
+        )
+        .unwrap(),
+        "class A;\n\nfunction F()\n{\n    Function(\n        Argument1,\n        Argument2\n        );\n}\n",
+    );
+}
+
+#[test]
 fn l2_declarations_are_filled() {
     let options = FormatOptions {
         line_width: 40,

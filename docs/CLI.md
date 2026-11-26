@@ -47,6 +47,7 @@ recovered from are also shown, under the code `parse`.
 | `--statistics` | Print the number of problems and files for each lint. |
 | `--fix` | Apply safe fixes to the files, then report the problems that are left. |
 | `--diff` | Print the changes `--fix` would make, as a unified diff, without changing any file. On a terminal (see `--color`), removed lines are red, added lines green, hunk headers cyan and file headers bold. |
+| `--add-ignore[=STYLE]` | Suppress the reported lint problems by writing `// usagi: ignore[...]` comments (see below), then exit with 0. `STYLE` is `name` (the default) or `code`; it must be attached with `=`. Can't be combined with `--fix` or `--diff`. |
 | `--strict` | Treat recovered problems as errors, as `parse --strict` does. |
 | `--include GLOB,...` / `--exclude GLOB,...` | Choose files (see below), replacing the configured lists. |
 
@@ -75,6 +76,21 @@ text that encoding can't store (e.g. a character above U+00FF in a Latin-1
 file) is not applied.
 
 Use `--diff` as a dry run: it prints what would change and writes nothing.
+
+#### Adding suppressions
+
+`--add-ignore` suppresses everything the selection reports, so pick the
+lints with `--select`/`--ignore`: `usagi lint --select N007 --add-ignore`
+suppresses every `class-name-ends-in-digit` problem. For each line a problem
+starts on, it adds a `// usagi: ignore[class-name-ends-in-digit]` comment
+(`--add-ignore=code` writes `ignore[N007]` instead) on its own line above,
+with the line's indentation; if the line above is already such a comment, the
+lints are added to it, unless it already lists them under either spelling.
+Files keep their encoding and line endings. Problems
+that aren't lints (recovered problems) and the suppression lints
+(`unused-suppression`, `invalid-suppression`) are skipped. It prints the
+number of lines and files changed to standard error. Run it only on files you
+can edit: shipped engine code is better excluded.
 
 ### `usagi lint rule <CODE|NAME>` / `usagi lint rule --all`
 
@@ -1216,6 +1232,7 @@ extend-select = ["C"]
 line-width = 120          # the longest a line may be. Default: 120
 indent-style = "spaces"   # spaces or tabs. Default: spaces
 indent-width = 4          # spaces per level of indentation (not with tabs). Default: 4
+max-one-per-line-arguments = 4  # calls with more non-empty arguments that don't fit are filled. Default: 4
 
 # Settings for `usagi build`.
 [build]

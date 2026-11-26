@@ -355,6 +355,7 @@ that doesn't is broken by the rules below.
 |---|---|
 | L1 | Breaks are never made inside a literal, or between a function's name and its `(`, and only at the `.` of a chain of calls (L7). A line that can't be broken (a long string, an object literal, an `A.B.C.D` path) is left over the width. |
 | L2 | A call's arguments that don't fit on its line go one per line, followed by a line for the `)`, all indented one level from the call's line, like parameters (R33). Each argument is laid out on its own line: one that fits there stays on it, and a call that doesn't breaks the same way, a level further in. An empty slot's comma stays on the line before (`A,,`). |
+| L2a | A call with more than `max-one-per-line-arguments` (default 4) non-empty arguments is filled instead: a line for the `(`, then as many arguments per line as fit, then a line for the `)`, indented as in L2. An argument that doesn't fit on a line of its own starts a new line and breaks inside, as in L2. A call with an end-of-line comment among its arguments is still laid out one per line. |
 | L2b | A list of declared names (`local`, `var`, `ignores`) that doesn't fit is filled: as many names per line as fit, with continuation lines indented one level from the line the list starts on. |
 | L3 | A chain of binary operators that doesn't fit is broken before each operator, which starts its line, one operand per line, with continuation lines indented one level from the line the chain starts on. |
 | L4 | The loosest-binding operator is broken first (`||` before `&&`), and each tighter group stays on one line if it fits. An assignment never breaks at its operator: its right-hand side does. |
@@ -382,6 +383,11 @@ return Repl(
     Repl(Repl(default.KickedFromSquadMessage, "{0}", RelatedPRI_1.PlayerName), "{1}", RelatedPRI_2.PlayerName),
     "{2}",
     static.GetSquadName(RelatedPRI_2.Team.TeamIndex, ExtraValue, DHSquadReplicationInfo(OptionalObject))
+    );
+
+PlayInfo.AddSetting(
+    default.BotsGroup, "GameDifficulty", GetDisplayText("GameDifficulty"), 0, 2, "Select", default.GIPropsExtras[0],
+    "Xb"
     );
 
 if (P == none

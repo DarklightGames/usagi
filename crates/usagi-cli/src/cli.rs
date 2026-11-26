@@ -533,6 +533,20 @@ pub struct LintArgs {
     /// changing any file.
     #[arg(long, conflicts_with = "fix")]
     pub diff: bool,
+
+    /// Suppress the reported problems by adding `// usagi: ignore[...]`
+    /// comments above the lines they start on, naming lints by `name`
+    /// (the default) or `code`.
+    #[arg(
+        long,
+        value_enum,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "name",
+        value_name = "STYLE",
+        conflicts_with_all = ["fix", "diff"]
+    )]
+    pub add_ignore: Option<IgnoreStyle>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -570,6 +584,14 @@ pub struct FormatArgs {
     /// Skip files matching these globs (replaces the configured list).
     #[arg(long, value_name = "GLOB", value_delimiter = ',')]
     pub exclude: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum IgnoreStyle {
+    /// `ignore[class-name-ends-in-digit]`
+    Name,
+    /// `ignore[N007]`
+    Code,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
