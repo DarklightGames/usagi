@@ -1921,6 +1921,8 @@ pub(super) fn number_text(text: &str) -> String {
         Some(b'-' | b'+') => text.split_at(1),
         _ => ("", text),
     };
+    // `- 1` is the literal `-1`, as UCC reads it.
+    let rest = rest.trim_start();
     let rest = match rest.match_indices('.').nth(1) {
         Some((i, _)) => &rest[..i],
         None => rest,

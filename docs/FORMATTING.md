@@ -329,6 +329,7 @@ and `Rotator` (which are structs, not keywords), are never changed.
 | # | Rule |
 |---|---|
 | R49 | Floats have digits on both sides of the point: `1.` is written `1.0` and `.5` is written `0.5`. Otherwise a number is printed as written: no zeros added or removed. |
+| R49b | A number's sign is written against it: `- 1` is written `-1`. A sign before another sign (`- -1`), a name or a parenthesis is a separate operator, and stays. |
 | R50 | Hex integers have a lower-case `0x` prefix; their digits are kept as written. |
 | R51 | Strings and names are never changed. |
 | R52 | `vect(...)` and `rot(...)` are spaced like calls. |
