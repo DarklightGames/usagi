@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use serde_json::{Value as Json, json};
 use usagi_pkg::diff::{Change, ExportDiff, PackageDiff, Side};
@@ -260,7 +260,7 @@ fn repo_path(path: &str) -> Result<String, String> {
 struct Input {
     /// As given on the command line.
     label: String,
-    package: Rc<Package>,
+    package: Arc<Package>,
     packages: Packages,
 }
 

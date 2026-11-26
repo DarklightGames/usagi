@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use rayon::prelude::*;
 
@@ -22,9 +22,9 @@ use crate::cli::{PkgExportArgs, PkgExportLayout, PkgExportNative, PkgPropertiesF
 /// A package file that has been read.
 struct Input {
     file: String,
-    package: Rc<Package>,
+    package: Arc<Package>,
     /// The packages of the game it's in, which declare its objects' classes.
-    packages: Rc<Packages>,
+    packages: Arc<Packages>,
 }
 
 /// Files an object's native data is written as: each one's extension
@@ -72,7 +72,7 @@ pub fn export(
             .collect()
     });
     // One set of packages per game, so each package is read once.
-    let mut games: HashMap<Vec<SearchPath>, Rc<Packages>> = HashMap::new();
+    let mut games: HashMap<Vec<SearchPath>, Arc<Packages>> = HashMap::new();
     let inputs = args
         .paths
         .iter()
@@ -80,10 +80,10 @@ pub fn export(
         .map(|(path, package)| {
             let file = path.display().to_string();
             let package = package?;
-            let packages = Rc::clone(
+            let packages = Arc::clone(
                 games
                     .entry(super::game::search_paths(path))
-                    .or_insert_with_key(|paths| Rc::new(Packages::new(paths.clone()))),
+                    .or_insert_with_key(|paths| Arc::new(Packages::new(paths.clone()))),
             );
             Ok(Input {
                 file,

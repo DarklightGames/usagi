@@ -44,12 +44,49 @@ recovered from are also shown, under the code `parse`.
 | `--extend-select LINT,...` | Report these lints as well. |
 | `--ignore LINT,...` | Don't report these lints, in addition to the configured ones. |
 | `--format FORMAT` | How to print problems (see below). |
-| `--statistics` | Print the number of problems and files for each lint. |
+| `--statistics` | Print the number of problems and files for each lint, then a summary of the project's classes (see below). |
+| `--no-project` | Don't index the project's classes (see below). |
 | `--fix` | Apply safe fixes to the files, then report the problems that are left. |
 | `--diff` | Print the changes `--fix` would make, as a unified diff, without changing any file. On a terminal (see `--color`), removed lines are red, added lines green, hunk headers cyan and file headers bold. |
 | `--add-ignore[=STYLE]` | Suppress the reported lint problems by writing `// usagi: ignore[...]` comments (see below), then exit with 0. `STYLE` is `name` (the default) or `code`; it must be attached with `=`. Can't be combined with `--fix` or `--diff`. |
 | `--strict` | Treat recovered problems as errors, as `parse --strict` does. |
 | `--include GLOB,...` / `--exclude GLOB,...` | Choose files (see below), replacing the configured lists. |
+
+#### The project's classes
+
+`lint --statistics` indexes the classes of every `.uc` file under the paths,
+including those that `include` and `exclude` leave out of the check (they're
+parsed to know their classes, and nothing is reported for them; one that
+doesn't parse is left out): which class
+extends which, and what each declares, so that a name can be looked up through
+the hierarchy and across classes (see
+[PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md)). The summary it prints follows the
+per-lint counts:
+
+```
+project: 7551 classes
+  classes that extend a class that isn't in the project: 0
+  class DHConsole is in two packages: a bare name means DH_Engine/Classes/DHConsole.uc, not DH_Interface/Classes/DHConsole.uc
+```
+
+* The number of classes, and the classes that extend one that isn't among the
+  files (listed by the name written in `extends`, with how many do). If a
+  parent is missing, what isn't found in the class is unknown, not missing.
+* `class X is in two packages`: classes of one name in different packages.
+  A bare name means the one named, in the first source root and then the first
+  by path; `Package.Class` tells them apart.
+* `class X is declared twice in one package`: the one in the first source
+  root (the first path given that contains it, or else the first by path) is
+  used, and the other isn't indexed.
+* `classes extend each other in a circle`: the classes, which are then
+  treated as having no parent.
+
+A file's package is the folder that holds its `Classes` folder
+(`<Package>/Classes/<Class>.uc`); a file elsewhere has none, and stands in for
+a class of any package.
+
+`--no-project` skips the index (and its summary); it takes memory for the
+symbol tables of every file, and time to build. Nothing else uses it yet.
 
 A lint selector is `ALL`, a code (`S003`), a code prefix (`S`, `S00`), a
 lint name (`self-assignment`) or a category name (`suspicious`), all

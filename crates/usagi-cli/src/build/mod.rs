@@ -764,6 +764,7 @@ fn check_sources(
         strict: options.strict,
         lint: false,
         ast: false,
+        project: false,
         fix: false,
         is_enabled: &never,
         jobs: options.jobs,

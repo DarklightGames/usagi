@@ -8,6 +8,7 @@ mod discover;
 mod format;
 mod output;
 mod pkg;
+mod project;
 mod suppress;
 
 use std::io::{self, IsTerminal, Write};
@@ -49,7 +50,11 @@ fn run(cli: Cli) -> Result<bool, String> {
         Command::Parse(args) => {
             let config = load()?;
             let settings = settings(&config, &args.files, cli.jobs, Overrides::default(), &cwd)?;
-            let reports = check_files(&args.files.paths, &settings, false, args.ast, false)?;
+            let reports = check_files(
+                &args.files.paths,
+                &settings,
+                Checking::Parse { ast: args.ast },
+            )?;
             let mut out = io::stdout().lock();
             if args.ast {
                 for report in &reports {
@@ -79,7 +84,14 @@ fn run(cli: Cli) -> Result<bool, String> {
             };
             let settings = settings(&config, &args.files, cli.jobs, overrides, &cwd)?;
             if let Some(style) = args.add_ignore {
-                let reports = check_files(&args.files.paths, &settings, true, false, false)?;
+                let reports = check_files(
+                    &args.files.paths,
+                    &settings,
+                    Checking::Lint {
+                        fix: false,
+                        project: false,
+                    },
+                )?;
                 let style = match style {
                     cli::IgnoreStyle::Name => suppress::Style::Name,
                     cli::IgnoreStyle::Code => suppress::Style::Code,
@@ -95,7 +107,26 @@ fn run(cli: Cli) -> Result<bool, String> {
                 return Ok(true);
             }
             let fixing = args.fix || args.diff;
-            let reports = check_files(&args.files.paths, &settings, true, false, fixing)?;
+            // Only `--statistics` uses the index for now; the lints that
+            // look at other classes will too.
+            let project = args.statistics && !args.no_project;
+            let mut reports = check_files(
+                &args.files.paths,
+                &settings,
+                Checking::Lint {
+                    fix: fixing,
+                    project,
+                },
+            )?;
+            // The files that `include` and `exclude` skip are part of the
+            // project, whose classes extend them.
+            let project = if project {
+                let others = discover::unselected(&paths_or_cwd(&args.files.paths), &settings);
+                let others = check::index_all(&others, settings.jobs)?;
+                Some(project::build(&mut reports, others, &args.files.paths))
+            } else {
+                None
+            };
             let mut out = io::stdout().lock();
             let fixed: usize = reports.iter().map(|r| r.fixed).sum();
             let fixed_files = reports.iter().filter(|r| r.fixed > 0).count();
@@ -145,6 +176,9 @@ fn run(cli: Cli) -> Result<bool, String> {
             }
             if args.statistics {
                 output::lint_statistics(&mut out, &reports).map_err(|e| e.to_string())?;
+                if let Some(project) = &project {
+                    project::statistics(&mut out, project, &cwd).map_err(|e| e.to_string())?;
+                }
             }
             Ok(!reports.iter().any(|r| {
                 r.outcome.is_failure()
@@ -346,22 +380,41 @@ fn settings(
     Settings::new(config, overrides, cwd).map_err(|ConfigError(e)| e)
 }
 
+/// `paths`, or the current directory if there are none.
+fn paths_or_cwd(paths: &[PathBuf]) -> Vec<PathBuf> {
+    if paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        paths.to_vec()
+    }
+}
+
+/// What to check files for.
+#[derive(Clone, Copy)]
+enum Checking {
+    Parse {
+        ast: bool,
+    },
+    Lint {
+        fix: bool,
+        /// Keep the symbol tables, to index the classes.
+        project: bool,
+    },
+}
+
 /// Checks every file under `paths`, in parallel. Reports come back sorted
 /// by path, with each file's problems sorted by position.
 fn check_files(
     paths: &[PathBuf],
     settings: &Settings,
-    lint: bool,
-    ast: bool,
-    fix: bool,
+    checking: Checking,
 ) -> Result<Vec<FileReport>, String> {
-    let default = [PathBuf::from(".")];
-    let paths = if paths.is_empty() {
-        &default[..]
-    } else {
-        paths
+    let (lint, ast, fix, project) = match checking {
+        Checking::Parse { ast } => (false, ast, false, false),
+        Checking::Lint { fix, project } => (true, false, fix, project),
     };
-    let (files, errors) = discover::files(paths, settings);
+    let paths = paths_or_cwd(paths);
+    let (files, errors) = discover::files(&paths, settings);
     if let Some(error) = errors.first() {
         return Err(error.clone());
     }
@@ -373,6 +426,7 @@ fn check_files(
         strict: settings.strict,
         lint,
         ast,
+        project,
         fix,
         is_enabled: &is_enabled,
         jobs: settings.jobs,

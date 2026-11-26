@@ -10,7 +10,7 @@
 //! say how: a byte's enum, a dynamic array's element type, and the layout of
 //! a struct stored in binary.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::packages::{Decl, Lookup, Packages, Scope, Type};
 use crate::reader::Reader;
@@ -767,7 +767,7 @@ impl Packages {
     /// If `export` is out of range.
     pub fn properties<'a>(
         &'a self,
-        package: &'a Rc<Package>,
+        package: &'a Arc<Package>,
         export: usize,
     ) -> Result<Properties<'a>> {
         let mut properties = package.properties(export)?;

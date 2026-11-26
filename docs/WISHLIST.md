@@ -24,6 +24,8 @@ Ideas that aren't implemented yet. For the lints that exist, see
 
 ### Needs a project-wide symbol table
 
+See [PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md) for the design.
+
 * Redundant `defaultproperties` values: a value that a subclass sets to the
   same value its parent already has.
 * A non-`Actor` `Object` that holds references to `Actor`s.
@@ -33,6 +35,21 @@ Ideas that aren't implemented yet. For the lints that exist, see
 * `simulated` outside an `Actor` subclass.
 * Argument types checked against function signatures, e.g. a string passed to
   `GotoState`.
+* A function that overrides nothing (a misspelled `PostBeginPlay`), and an
+  override whose signature differs from the original.
+* An unresolved class in `extends`, `class'X'` or `Spawn`.
+* A class that uses one from a package later in `EditPackages`, and cycles
+  between packages.
+* `private` and `protected` access across classes.
+
+### Needs a project-wide symbol table: commands
+
+* `usagi graph`: class hierarchy and package dependencies as DOT, Mermaid
+  or JSON.
+* `usagi refs`: who overrides, calls, extends or refers to a class or
+  member.
+* Check `EditPackages` order before running UCC, and rebuild only the
+  packages a change affects.
 
 ## CLI
 

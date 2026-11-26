@@ -10,7 +10,7 @@
 //! each export's index): they're compared too, and marked as volatile.
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::archive::NameRef;
 use crate::volatile::VOLATILE_PROPERTIES;
@@ -40,7 +40,7 @@ pub struct Side<'a> {
     /// read by them; it should be one of them, so that the classes it
     /// declares itself are found.
     pub packages: &'a Packages,
-    pub package: &'a Rc<Package>,
+    pub package: &'a Arc<Package>,
     /// The exports to compare, by index; `None` for every one.
     pub exports: Option<&'a [usize]>,
 }

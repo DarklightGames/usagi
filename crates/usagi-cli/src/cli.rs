@@ -521,9 +521,15 @@ pub struct LintArgs {
     #[arg(long, value_enum, default_value_t = OutputFormat::Full)]
     pub format: OutputFormat,
 
-    /// Print how many problems each lint found.
+    /// Print how many problems each lint found, and about the project's
+    /// classes.
     #[arg(long)]
     pub statistics: bool,
+
+    /// Don't index the project's classes, which lints that look at other
+    /// classes and `--statistics` use.
+    #[arg(long)]
+    pub no_project: bool,
 
     /// Apply safe fixes to the files.
     #[arg(long)]

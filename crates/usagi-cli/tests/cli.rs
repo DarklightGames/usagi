@@ -256,6 +256,95 @@ fn parse_outcomes() {
 }
 
 #[test]
+fn lint_statistics_describe_the_project() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", "class Object;\n"),
+        ("Core/Classes/Actor.uc", "class Actor extends Object;\n"),
+        ("Mod/Classes/Pawn.uc", "class Pawn extends Actor;\n"),
+        ("Mod/Classes/Lost.uc", "class Lost extends Gone.Away;\n"),
+        ("Mod/Classes/A.uc", "class A extends B;\n"),
+        ("Mod/Classes/B.uc", "class B extends A;\n"),
+        ("Mod/Classes/Dup.uc", "class Dup;\n"),
+        ("Mod/Other/Classes/Dup.uc", "class Dup;\n"),
+        ("Mod/Same/Classes/Dup.uc", "class Dup;\n"),
+        ("Loose.uc", "class Loose;\n"),
+    ]);
+    let output = usagi(dir.path())
+        .args(["lint", "--format", "quiet", "--statistics"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let project = &stdout[stdout.find("project:").expect("a project summary")..];
+    assert_eq!(
+        project,
+        "project: 10 classes\n\
+         \x20 classes that extend a class that isn't in the project: 1\n\
+         \x20   Gone.Away                                     1\n\
+         \x20 class Dup is in two packages: a bare name means Mod/Classes/Dup.uc, not Mod/Other/Classes/Dup.uc\n\
+         \x20 class Dup is in two packages: a bare name means Mod/Classes/Dup.uc, not Mod/Same/Classes/Dup.uc\n\
+         \x20 classes extend each other in a circle: A -> B\n"
+    );
+    // Without a project there's no summary, and the same lints are reported.
+    usagi(dir.path())
+        .args(["lint", "--format", "quiet", "--statistics", "--no-project"])
+        .assert()
+        .stdout(predicate::str::contains("project:").not());
+    // Nor without asking for statistics.
+    usagi(dir.path())
+        .args(["lint", "--format", "quiet"])
+        .assert()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn lint_statistics_report_repeated_classes_of_one_package() {
+    let dir = project(&[
+        ("Mod/Classes/Dup.uc", "class Dup;\n"),
+        ("Mod/Classes/Sub/Dup.uc", "class Dup;\n"),
+        ("Game/Mod/Classes/Dup.uc", "class Dup;\n"),
+    ]);
+    // Two roots: the first replaces the second's class of the same name.
+    usagi(dir.path())
+        .args(["lint", "--format", "quiet", "--statistics", "Mod", "Game"])
+        .assert()
+        .stdout(predicate::str::contains("project: 1 classes\n"))
+        .stdout(predicate::str::contains(
+            "class Dup is declared twice in one package: Mod/Classes/Dup.uc is used, Game/Mod/Classes/Dup.uc isn't",
+        ));
+}
+
+#[test]
+fn the_project_includes_files_that_are_not_linted() {
+    // `include` chooses what is linted; the classes the linted ones extend
+    // are still part of the project.
+    let dir = project(&[
+        ("usagi.toml", "include = [\"Mod/*\"]\n"),
+        ("Core/Classes/Object.uc", "class Object;\nvar int X;\n"),
+        ("Mod/Classes/Pawn.uc", "class Pawn extends Object;\n"),
+        ("Mod/Classes/Lost.uc", "class Lost extends Gone;\n"),
+        ("Core/Classes/Broken.uc", "class Broken extends {\n"),
+    ]);
+    let output = usagi(dir.path())
+        .args(["lint", "--format", "quiet", "--statistics"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let project = &stdout[stdout.find("project:").unwrap()..];
+    assert_eq!(
+        project,
+        "project: 3 classes\n\
+         \x20 classes that extend a class that isn't in the project: 1\n\
+         \x20   Gone                                          1\n"
+    );
+    // Only the files that are included are checked: the lints and the count
+    // of files don't change.
+    usagi(dir.path())
+        .args(["lint", "--format", "quiet", "--statistics", "--no-project"])
+        .assert()
+        .stdout(predicate::str::contains("project:").not());
+}
+
+#[test]
 fn parse_ast() {
     let dir = project(&[("Bar.uc", CLEAN)]);
     usagi(dir.path())
