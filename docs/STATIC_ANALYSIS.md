@@ -174,6 +174,7 @@ never applied from the command line; they are for an editor to offer.
 | S015 | `shadowed-variable` | Warning |  | A local or argument with the same name as a variable or const of the class (or state). In a `static` function only consts count, since instance variables aren't accessible there. Arguments of a function without a body, such as a delegate or native function, aren't checked. |
 | S016 | `missing-return` | Warning |  | A function with a return type where some path reaches the end without `return`; UCC returns zero or `None` there. Understands `if`/`else`, `switch` with `default` (including fallthrough into a case that returns) and `while (true)`/`for (;;)` loops without `break`. |
 | S017 | `invalid-suppression` | Warning |  | A `usagi:` comment that is malformed, such as `usagi: ignore` without brackets, or a selector in one that matches no lint (see [Suppression comments](#suppression-comments)). |
+| S018 | `non-exhaustive-switch` | Warning |  | A `switch` on an enum with no `default` that has no `case` for some of the enum's values. The enum can be declared in the class or in any class it extends, and the subject can be a local, an argument, a variable (also a parent's, another object's, a struct's or an array element), what a function returns, or a cast to the enum. A `switch` whose subject's type isn't known, or with a `case` that isn't known to be a value of the enum (a literal, another enum's value, an expression), isn't reported. Needs the project, and is opt-in. |
 
 ### Performance
 

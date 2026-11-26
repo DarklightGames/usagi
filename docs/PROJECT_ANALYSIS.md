@@ -13,7 +13,7 @@ per-file tables, so that unknown names can become known.
 
 ## Status
 
-Done (steps 0 to 4b, and the graph of 6, of [Order of work](#order-of-work)):
+Done (steps 0 to 4, the graph of 6 and the first typing of 7, of [Order of work](#order-of-work)):
 
 - `usagi_pkg::Packages` is `Send + Sync` (`Arc` and locks in place of `Rc` and
   `RefCell`); threads that race to read a package get the same `Arc`.
@@ -29,6 +29,14 @@ Done (steps 0 to 4b, and the graph of 6, of [Order of work](#order-of-work)):
   `Project`: a project lint is a function of the index. A lint that needs more
   than the table keeps will have the table keep it, the same way.
 
+- Minimal typing, and the lint that needed it: S018 `non-exhaustive-switch`,
+  opt-in (steps 4d and 7, in part). The symbol table records each `switch`
+  (its subject and `case` labels as `Operand`s, names that can be looked up
+  once the project is known, and whether it has a `default`), and function
+  return types. `usagi_core::typing::type_of` types a subject through the
+  project: names (locals, arguments, a class's or a parent's variables),
+  `Self`, members of classes and structs, array elements, what a function
+  returns, and casts. Everything else has no type, and a lint says nothing.
 - `usagi graph` (step 6, brought forward): the class hierarchy and the
   package dependencies (an extends from one package to another), as a tree,
   Graphviz DOT, a Mermaid flowchart or JSON, with `--class`, `--ancestors`,
@@ -169,7 +177,7 @@ Added to [STATIC_ANALYSIS.md](STATIC_ANALYSIS.md) with each, as usual.
 First step, hierarchy and enums:
 
 - Non-exhaustive `switch` on an enum, for enums declared in any class in
-  the hierarchy or elsewhere (extends the per-file lint on the wishlist).
+  the hierarchy (S018; done).
 - A `defaultproperties` key not declared anywhere in the hierarchy (C017;
   done). A delegate is declared as a function, so it counts.
 - An override with a different signature from the one it overrides.
@@ -296,11 +304,13 @@ Corpus timings are too noisy on shared CI runners to gate on.
 4. The first lints, each run on the corpus with its hits read through, as for
    any lint: undeclared `defaultproperties` key (*done*, C017); then
    `usagi graph` (step 6, brought forward; *done*); then, with the minimal typing
-   it needs, non-exhaustive `switch`.
+   it needs, non-exhaustive `switch` (*done*, S018).
 5. `DeclarationSource` and the packages implementation; then the stock
    classes resolve and the "chain ends in a missing parent" cases shrink.
-6. `usagi graph`, then the dependency lints.
-7. Minimal typing, then the lints that need it.
+6. `usagi graph` (*done*), then the dependency lints.
+7. Minimal typing (*done*: what S018 needs), then the lints that need more:
+   argument types against signatures, operators and literals, `private` and
+   `protected` access, and the `Actor`-reference lint.
 
 ## Risks
 

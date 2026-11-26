@@ -9,10 +9,13 @@
 
 use crate::lint::Lint;
 use crate::parser::ProgramError;
+use crate::project::Declaration;
 use crate::project::{ClassId, Lookup, Project};
 use crate::suppression::Suppressions;
-use crate::symbols::Namespace;
+use crate::symbols::{Namespace, Operand, SymbolId, SymbolKind};
+use crate::typing;
 use crate::{LineIndex, source};
+use std::collections::HashSet;
 
 /// The problems the project lints find in `class`, with the lines of their
 /// spans set and the ones that a suppression comment in `source` (the text of
@@ -38,6 +41,7 @@ pub fn lint(project: &Project, class: ClassId, source: &str) -> Vec<ProgramError
 pub fn check(project: &Project, class: ClassId) -> Vec<ProgramError> {
     let mut errors = Vec::new();
     undeclared_default_properties(project, class, &mut errors);
+    non_exhaustive_switches(project, class, &mut errors);
     errors
 }
 
@@ -66,4 +70,99 @@ fn undeclared_default_properties(
             });
         }
     }
+}
+
+/// How many missing values a message lists.
+const MISSING_SHOWN: usize = 5;
+
+fn non_exhaustive_switches(project: &Project, class: ClassId, errors: &mut Vec<ProgramError>) {
+    let lint = Lint::NonExhaustiveSwitch;
+    let table = project.table(class);
+    for switch in table.switches().iter().filter(|s| !s.has_default) {
+        let Some(subject) = typing::type_of(project, class, switch.scope, &switch.subject) else {
+            continue;
+        };
+        let Some(enum_) = typing::enum_of(project, &subject) else {
+            continue;
+        };
+        // A label that isn't a value of this enum, or isn't known to be, says
+        // nothing about which values are handled.
+        let handled: Option<HashSet<SymbolId>> = switch
+            .labels
+            .iter()
+            .map(|label| enum_value(project, class, enum_, label))
+            .collect();
+        let Some(handled) = handled else { continue };
+        let missing: Vec<&str> = project
+            .enum_values(enum_)
+            .into_iter()
+            .filter(|value| !handled.contains(value))
+            .map(|value| project.table(enum_.class).symbol(value).name.as_str())
+            .collect();
+        if missing.is_empty() {
+            continue;
+        }
+        let listed = missing
+            .iter()
+            .take(MISSING_SHOWN)
+            .map(|name| format!("`{}`", name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = match missing.len().saturating_sub(MISSING_SHOWN) {
+            0 => String::new(),
+            n => format!(" and {} more", n),
+        };
+        let enum_name = &project.symbol(enum_).name;
+        errors.push(ProgramError {
+            message: format!(
+                "`switch` on `{}` has no `default` and doesn't handle {}{}",
+                enum_name.as_str(),
+                listed,
+                more
+            ),
+            span: switch.span,
+            severity: lint.severity(),
+            lint: Some(lint),
+            fix: None,
+        });
+    }
+}
+
+/// The value of `enum_` that a `case` label is, if it is one: `Value` or
+/// `Enum.Value`.
+fn enum_value(
+    project: &Project,
+    class: ClassId,
+    enum_: Declaration,
+    label: &Operand,
+) -> Option<SymbolId> {
+    let value = match label {
+        Operand::Name(name) => {
+            let value = project.lookup(class, Namespace::Value, name).found()?;
+            match project.symbol(value).kind {
+                SymbolKind::EnumValue { enum_: of, .. } if of == enum_.symbol => value,
+                _ => return None,
+            }
+        }
+        Operand::Member(owner, name) => {
+            let Operand::Name(owner) = owner.as_ref() else {
+                return None;
+            };
+            let written = project.resolve_type(class, owner).found()?;
+            if written != enum_ {
+                return None;
+            }
+            let table = project.table(enum_.class);
+            let value = project
+                .enum_values(enum_)
+                .into_iter()
+                .find(|&v| table.symbol(v).name == *name)?;
+            Declaration {
+                class: enum_.class,
+                symbol: value,
+            }
+        }
+        _ => return None,
+    };
+    (value.class == enum_.class).then_some(value.symbol)
 }

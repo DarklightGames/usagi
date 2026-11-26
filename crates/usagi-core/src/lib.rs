@@ -8,6 +8,7 @@ pub mod project_lint;
 pub mod source;
 pub mod suppression;
 pub mod symbols;
+pub mod typing;
 pub mod visitor;
 
 // Re-export main parsing functions and types for library consumers

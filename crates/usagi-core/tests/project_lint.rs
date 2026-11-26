@@ -175,3 +175,248 @@ fn a_class_with_nothing_to_report_costs_nothing() {
     let class: ClassId = p.class("Object").unwrap();
     assert!(project_lint::lint(&p, class, OBJECT).is_empty());
 }
+
+// S018 non-exhaustive-switch, and the typing it rests on.
+
+/// The `(line, message)` of each non-exhaustive `switch` in the last source.
+fn switches(sources: &[&str]) -> Vec<(usize, String)> {
+    let p = project(sources);
+    let last = sources.last().unwrap();
+    let class = p.classes().last().unwrap();
+    project_lint::lint(&p, class, last)
+        .into_iter()
+        .filter(|e| e.lint == Some(Lint::NonExhaustiveSwitch))
+        .map(|e| (e.span.line.unwrap(), e.message))
+        .collect()
+}
+
+const COLORS: &str = "class Object;\n\
+    enum EColor { C_Red, C_Green, C_Blue };\n\
+    struct Pair { var EColor First; var EColor Second[2]; };\n";
+
+/// A class `Holder` with state to switch on.
+const HOLDER: &str = "class Holder extends Object;\n\
+    var EColor Color;\n\
+    var EColor Palette[3];\n\
+    var array<EColor> Many;\n\
+    var Pair Both;\n\
+    var int Count;\n\
+    var byte Raw;\n\
+    var Mystery Odd;\n\
+    function Nada() {}\n\
+    function EColor Pick() { return C_Red; }\n\
+    static function EColor Make() { return C_Red; }\n";
+
+/// A class `Foo` that extends `Holder`, with `body` as the body of `F`.
+fn foo(body: &str) -> String {
+    format!(
+        "class Foo extends Holder;\nvar Holder Other;\nfunction F(EColor Arg)\n{{\n    local EColor Local;\n{}\n}}\n",
+        body
+    )
+}
+
+#[test]
+fn a_switch_that_misses_values() {
+    let source = foo(
+        "    switch (Color)\n    {\n        case C_Red:\n            break;\n        case C_Blue:\n            break;\n    }",
+    );
+    assert_eq!(
+        switches(&[COLORS, HOLDER, &source]),
+        [(
+            6,
+            "`switch` on `EColor` has no `default` and doesn't handle `C_Green`".to_string()
+        )]
+    );
+}
+
+#[test]
+fn what_makes_a_switch_exhaustive() {
+    let all = "    switch (Color)\n    {\n        case C_Red:\n        case C_Green:\n        case C_Blue:\n            break;\n    }";
+    let qualified = "    switch (Color)\n    {\n        case EColor.C_Red:\n        case EColor.C_Green:\n        case c_BLUE:\n            break;\n    }";
+    let with_default = "    switch (Color)\n    {\n        case C_Red:\n            break;\n        default:\n            break;\n    }";
+    let only_default = "    switch (Color)\n    {\n        default:\n    }";
+    for body in [all, qualified, with_default, only_default] {
+        assert_eq!(switches(&[COLORS, HOLDER, &foo(body)]), [], "{}", body);
+    }
+    // No cases at all handles nothing.
+    let none = "    switch (Color)\n    {\n    }";
+    assert_eq!(
+        switches(&[COLORS, HOLDER, &foo(none)]),
+        [(
+            6,
+            "`switch` on `EColor` has no `default` and doesn't handle `C_Red`, `C_Green`, `C_Blue`"
+                .to_string()
+        )]
+    );
+}
+
+#[test]
+fn many_missing_values_are_not_all_listed() {
+    let object = "class Object;\nenum EDay { D_1, D_2, D_3, D_4, D_5, D_6, D_7 };\nvar EDay Day;\n";
+    let foo = "class Foo extends Object;\nfunction F()\n{\n    switch (Day)\n    {\n        case D_1:\n    }\n}\n";
+    assert_eq!(
+        switches(&[object, foo]),
+        [(
+            4,
+            "`switch` on `EDay` has no `default` and doesn't handle `D_2`, `D_3`, `D_4`, `D_5`, `D_6` and 1 more".to_string()
+        )]
+    );
+}
+
+#[test]
+fn the_type_of_the_subject() {
+    let case = "        case C_Red:\n            break;\n    }";
+    let each = |subject: &str| {
+        let body = format!("    switch ({})\n    {{\n{}", subject, case);
+        switches(&[COLORS, HOLDER, &foo(&body)]).len()
+    };
+    for subject in [
+        // A name: a local, an argument, one of the class's or a parent's.
+        "Local",
+        "Arg",
+        "Color",
+        "Self.Color",
+        "(Color)",
+        // Other classes' members, and structs'.
+        "Other.Color",
+        "Both.First",
+        "Other.Both.First",
+        // Elements of arrays.
+        "Palette[1]",
+        "Many[0]",
+        "Both.Second[1]",
+        // What a function returns, and a cast.
+        "Pick()",
+        "Other.Pick()",
+        "Self.Other.Make()",
+        "EColor(Raw)",
+        "EColor(Count + 1)",
+    ] {
+        assert_eq!(each(subject), 1, "{}", subject);
+    }
+    for subject in [
+        // Not an enum, or not known to be one.
+        "Count",
+        "Raw",
+        "Count + 1",
+        "Palette",
+        "Many",
+        "Nothing",
+        "Other.Nothing",
+        "Other.Count",
+        "Pick",
+        "Palette[1][2]",
+        "Count[1]",
+        "Both.Nothing",
+        "Both.Second",
+        "Count.X",
+        "Both.First.X",
+        "Other.Pick().X",
+        "Other().Y",
+        "Pick(1)()",
+        "byte(Raw)",
+        "Nothing()",
+        "Nothing.Pick()",
+        "Nothing[0]",
+        "Both",
+        "Nothing.Color",
+        "Other.Nothing()",
+        "Palette.Color",
+        "Odd.X",
+        "C_Red",
+        "Nada()",
+        "class<Holder>(Other)",
+        "Both.First()",
+        "1",
+        "default.Color",
+        "Super.Color",
+    ] {
+        assert_eq!(each(subject), 0, "{}", subject);
+    }
+}
+
+#[test]
+fn a_label_that_isnt_known_to_be_a_value_says_nothing() {
+    let wrap = |labels: &str| {
+        foo(&format!(
+            "    switch (Color)\n    {{\n        case C_Red:\n{}\n    }}",
+            labels
+        ))
+    };
+    let other_enum = "class Other extends Object;\nenum EShape { S_Round };\n";
+    for labels in [
+        "        case 1:",
+        "        case Count:",
+        "        case Nothing:",
+        "        case S_Round:",
+        "        case EShape.S_Round:",
+        "        case EColor.Nothing:",
+        "        case Other.C_Green:",
+        "        case Pick():",
+        "        case Pair.First:",
+        "        case EColor.C_Red.X:",
+    ] {
+        let source = wrap(labels);
+        assert_eq!(
+            switches(&[COLORS, HOLDER, other_enum, &source]),
+            [],
+            "{}",
+            labels
+        );
+    }
+}
+
+#[test]
+fn a_chain_that_isnt_known_says_nothing() {
+    // `Holder`'s parent isn't in the project, so `Color` can't be typed.
+    let source = foo("    switch (Color)\n    {\n    }");
+    assert_eq!(switches(&[HOLDER, &source]), []);
+}
+
+#[test]
+fn enums_declared_in_other_classes() {
+    // The enum is in a class that neither extends the other.
+    let shapes = "class Shapes extends Object;\nenum EShape { S_Round, S_Square };\n";
+    let user = "class User extends Object;\nvar Shapes.EShape Shape;\nfunction F()\n{\n    switch (Shape)\n    {\n        case S_Round:\n    }\n}\n";
+    // The type is written `Shapes.EShape`, the label by its bare name, which
+    // `User` can't see (it doesn't extend `Shapes`): what the label is isn't
+    // known, so nothing is said.
+    assert_eq!(switches(&[COLORS, shapes, user]), []);
+    // A subclass of the one declaring the enum sees it.
+    let child = "class Child extends Shapes;\nvar EShape Shape;\nfunction F()\n{\n    switch (Shape)\n    {\n        case S_Round:\n    }\n}\n";
+    assert_eq!(
+        switches(&[COLORS, shapes, child]),
+        [(
+            5,
+            "`switch` on `EShape` has no `default` and doesn't handle `S_Square`".to_string()
+        )]
+    );
+}
+
+#[test]
+fn switches_in_states_and_state_code() {
+    let source = "class Foo extends Holder;\n\
+        state Busy\n\
+        {\n\
+        \x20   function G()\n\
+        \x20   {\n\
+        \x20       switch (Color) { case C_Red: }\n\
+        \x20   }\n\
+        Begin:\n\
+        \x20   switch (Pick()) { case C_Red: }\n\
+        }\n";
+    let found = switches(&[COLORS, HOLDER, source]);
+    assert_eq!(found.iter().map(|f| f.0).collect::<Vec<_>>(), [6, 9]);
+}
+
+#[test]
+fn a_switch_can_be_suppressed_by_naming_it() {
+    let body = "    // usagi: ignore[S018]\n    switch (Color) { case C_Red: }\n    switch (Color) { case C_Red: }\n    // usagi: ignore[suspicious]\n    switch (Color) { case C_Red: }";
+    assert_eq!(
+        switches(&[COLORS, HOLDER, &foo(body)])
+            .iter()
+            .map(|f| f.0)
+            .collect::<Vec<_>>(),
+        [8, 10]
+    );
+}

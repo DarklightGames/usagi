@@ -124,7 +124,10 @@ macro_rules! lints {
             /// code or its name, selects it. `ALL`, a prefix of its code
             /// and its category don't.
             pub fn needs_project(self) -> bool {
-                matches!(self, Lint::UndeclaredDefaultProperty)
+                matches!(
+                    self,
+                    Lint::UndeclaredDefaultProperty | Lint::NonExhaustiveSwitch
+                )
             }
 
             /// Looks a lint up by its code or name (case-insensitive).
@@ -207,6 +210,8 @@ lints! {
         "A function with a return type where a path doesn't end in `return`."),
     InvalidSuppression = ("S017", "invalid-suppression", Suspicious, Warning, Never,
         "A `usagi:` suppression comment that is malformed or names no lint."),
+    NonExhaustiveSwitch = ("S018", "non-exhaustive-switch", Suspicious, Warning, Never,
+        "A `switch` on an enum with no `default` that doesn't handle every value. Opt-in."),
     // Performance
     ActorIteratorInPerFrameFunction = ("P001", "actor-iterator-in-per-frame-function", Performance, Warning, Never,
         "`foreach AllActors`/`DynamicActors` in a function called every frame, such as `Tick`."),
@@ -388,6 +393,10 @@ mod tests {
             assert!(!LintSelection::new([selector], []).is_enabled(opt_in));
         }
         assert!(!LintSelection::default().is_enabled(opt_in));
+        let switch = Lint::NonExhaustiveSwitch;
+        assert!(switch.needs_project());
+        assert!(!LintSelection::new(["S", "suspicious", "ALL"], []).is_enabled(switch));
+        assert!(LintSelection::new(["S018"], []).is_enabled(switch));
         for selector in ["C017", "c017", "undeclared-default-property"] {
             assert!(LintSelection::new(["ALL", selector], []).is_enabled(opt_in));
             assert!(!LintSelection::new(["ALL", selector], [selector]).is_enabled(opt_in));

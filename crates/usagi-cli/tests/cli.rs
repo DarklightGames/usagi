@@ -400,6 +400,41 @@ fn undeclared_default_properties_are_opt_in() {
 }
 
 #[test]
+fn non_exhaustive_switches_are_opt_in() {
+    let dir = project(&[
+        (
+            "Core/Classes/Object.uc",
+            "class Object;\nenum EColor { C_Red, C_Green };\nvar EColor Color;\n",
+        ),
+        (
+            "Mod/Classes/Pawn.uc",
+            "class Pawn extends Object;\nfunction F()\n{\n    switch (Color)\n    {\n        case C_Red:\n            break;\n    }\n}\n",
+        ),
+    ]);
+    let found = "Mod/Classes/Pawn.uc:4:5: S018 `switch` on `EColor` has no `default` and doesn't handle `C_Green`\n";
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    for selectors in [
+        &[][..],
+        &["--select", "S"],
+        &["--select", "suspicious"],
+        &["--select", "ALL"],
+    ] {
+        assert_eq!(run(selectors), "", "{:?}", selectors);
+    }
+    assert_eq!(run(&["--select", "S018"]), found);
+    assert_eq!(run(&["--select", "non-exhaustive-switch"]), found);
+    assert_eq!(run(&["--extend-select", "S018,C017"]), found);
+    assert_eq!(run(&["--select", "S018", "--no-project"]), "");
+}
+
+#[test]
 fn undeclared_default_properties_by_configuration() {
     let dir = project(&[
         (

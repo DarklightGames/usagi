@@ -125,6 +125,8 @@ pub enum SymbolKind {
         types: Vec<FunctionTypeType>,
         modifiers: Vec<FunctionModifierType>,
         has_body: bool,
+        /// What it returns, if anything.
+        return_type: Option<TypeRef>,
     },
     State {
         /// The state it `extends`, if any.
@@ -262,6 +264,65 @@ pub struct Reference {
     pub kind: ReferenceKind,
 }
 
+/// What an expression is, as far as the file can tell, for finding its type
+/// once the names in it can be looked up in other classes (see
+/// [`crate::typing`]). It keeps names, not what they refer to: a variable the
+/// file doesn't declare may be a parent's.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Operand {
+    /// A name: a local, an argument, a variable (of the class or a parent), or
+    /// an enum value.
+    Name(Identifier),
+    /// `Self`.
+    This,
+    /// `operand.name`.
+    Member(Box<Operand>, Identifier),
+    /// `operand[...]`.
+    Index(Box<Operand>),
+    /// A call of the function `operand` names, or a cast to the type it names.
+    Call(Box<Operand>),
+    /// A cast to a type that isn't a name, such as `byte(X)`.
+    Cast(TypeRef),
+    /// Anything else, which has no type here.
+    Unknown,
+}
+
+impl Operand {
+    fn of(expression: &Expression) -> Operand {
+        match expression {
+            Expression::Identifier(name) if name.eq_ignore_ascii_case("self") => Operand::This,
+            Expression::Identifier(name) => Operand::Name(name.data.clone()),
+            Expression::ParentheticalExpression(inner) => Operand::of(&inner.data),
+            Expression::MemberAccess { operand, target } => {
+                Operand::Member(Box::new(Operand::of(&operand.data)), target.data.clone())
+            }
+            Expression::ArrayAccess { operand, .. } => {
+                Operand::Index(Box::new(Operand::of(&operand.data)))
+            }
+            Expression::Call { operand, .. } => Operand::Call(Box::new(Operand::of(&operand.data))),
+            Expression::GlobalCall { name, .. } => {
+                Operand::Call(Box::new(Operand::Name(name.data.clone())))
+            }
+            Expression::Cast { type_, .. } => Operand::Cast(type_.into()),
+            _ => Operand::Unknown,
+        }
+    }
+}
+
+/// A `switch` statement, with what's needed to tell whether it handles every
+/// value of an enum.
+#[derive(Debug, Clone)]
+pub struct SwitchRecord {
+    /// From the start of `switch` to the end of its subject.
+    pub span: AstSpan,
+    /// The scope the subject is in, to look names up in.
+    pub scope: ScopeId,
+    pub subject: Operand,
+    /// The expression of each `case`.
+    pub labels: Vec<Operand>,
+    pub has_default: bool,
+}
+
 /// About the class a file declares.
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
@@ -289,6 +350,7 @@ pub struct SymbolTable {
     /// The properties `defaultproperties` assigns that the class doesn't
     /// declare, which a parent class may.
     unresolved_defaults: Vec<UnresolvedName>,
+    switches: Vec<SwitchRecord>,
 }
 
 /// A name that a file uses but doesn't declare.
@@ -309,6 +371,7 @@ impl SymbolTable {
             references_by_symbol: Vec::new(),
             scopes_by_declaration: HashMap::new(),
             unresolved_defaults: Vec::new(),
+            switches: Vec::new(),
         };
         table.add_scope(ScopeKind::Class, None);
         table.declare_program(program);
@@ -402,6 +465,11 @@ impl SymbolTable {
         &self.unresolved_defaults
     }
 
+    /// The `switch` statements, in order.
+    pub fn switches(&self) -> &[SwitchRecord] {
+        &self.switches
+    }
+
     /// Every resolved reference, sorted by position.
     pub fn references(&self) -> &[Reference] {
         &self.references
@@ -437,6 +505,9 @@ impl SymbolTable {
         }
         for reference in &mut self.references {
             reference.span.line = Some(line_of(reference.span.start));
+        }
+        for switch in &mut self.switches {
+            switch.span.line = Some(line_of(switch.span.start));
         }
         if let Some(class) = &mut self.class {
             class.span.line = Some(line_of(class.span.start));
@@ -558,6 +629,7 @@ impl SymbolTable {
             types: f.types.iter().map(|t| t.type_).collect(),
             modifiers,
             has_body: f.body.is_some(),
+            return_type: f.return_type.as_ref().map(TypeRef::from),
         };
         let id = self.add(scope, &f.name, kind, access);
         let function_scope = self.add_scope(ScopeKind::Function(id), Some(scope));
@@ -951,6 +1023,31 @@ impl Resolver<'_> {
         }
     }
 
+    fn record_switch(&mut self, statement: &AstNode<CodeStatement>, s: &SwitchStatement) {
+        let labels = s
+            .cases
+            .iter()
+            .filter_map(|case| match &case.type_ {
+                SwitchCaseType::Expression(label) => Some(Operand::of(&label.data)),
+                SwitchCaseType::Default => None,
+            })
+            .collect();
+        self.table.switches.push(SwitchRecord {
+            span: AstSpan {
+                start: statement.span.start,
+                end: s.predicate.span.end,
+                line: None,
+            },
+            scope: self.scope,
+            subject: Operand::of(&s.predicate.data),
+            labels,
+            has_default: s
+                .cases
+                .iter()
+                .any(|case| matches!(case.type_, SwitchCaseType::Default)),
+        });
+    }
+
     fn body(&mut self, body: &AstNode<CodeStatementOrBlock>) {
         match &body.data {
             CodeStatementOrBlock::CodeStatement(s) => self.statement(s),
@@ -996,6 +1093,7 @@ impl Resolver<'_> {
                 self.body(&f.body);
             }
             CodeStatement::Switch(s) => {
+                self.record_switch(statement, s);
                 self.expression(&s.predicate);
                 for case in &s.cases {
                     if let SwitchCaseType::Expression(label) = &case.type_ {

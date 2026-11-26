@@ -7,7 +7,6 @@ Ideas that aren't implemented yet. For the lints that exist, see
 
 ### Per file
 
-* Non-exhaustive `switch` on an `enum` value, for enums declared in the file.
 * `[]` instead of `()` as the array index in a `defaultproperties` target.
 * Statements (`#exec`, `const`) before the class declaration. Parsing this
   is an accepted quirk (see [PERMISSIVE_PARSING.md](PERMISSIVE_PARSING.md)), so
@@ -29,7 +28,6 @@ See [PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md) for the design.
 * Redundant `defaultproperties` values: a value that a subclass sets to the
   same value its parent already has (see below).
 * A non-`Actor` `Object` that holds references to `Actor`s.
-* Exhaustive `switch` checking for enums declared in other classes.
 * A `config` variable in a class that isn't `config` anywhere in its hierarchy.
 * `simulated` outside an `Actor` subclass.
 * Argument types checked against function signatures, e.g. a string passed to
