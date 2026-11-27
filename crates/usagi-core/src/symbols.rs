@@ -125,6 +125,8 @@ pub enum SymbolKind {
         types: Vec<FunctionTypeType>,
         modifiers: Vec<FunctionModifierType>,
         has_body: bool,
+        /// What it returns, if anything.
+        return_type: Option<TypeRef>,
     },
     State {
         /// The state it `extends`, if any.
@@ -262,6 +264,65 @@ pub struct Reference {
     pub kind: ReferenceKind,
 }
 
+/// What an expression is, as far as the file can tell, for finding its type
+/// once the names in it can be looked up in other classes (see
+/// [`crate::typing`]). It keeps names, not what they refer to: a variable the
+/// file doesn't declare may be a parent's.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Operand {
+    /// A name: a local, an argument, a variable (of the class or a parent), or
+    /// an enum value.
+    Name(Identifier),
+    /// `Self`.
+    This,
+    /// `operand.name`.
+    Member(Box<Operand>, Identifier),
+    /// `operand[...]`.
+    Index(Box<Operand>),
+    /// A call of the function `operand` names, or a cast to the type it names.
+    Call(Box<Operand>),
+    /// A cast to a type that isn't a name, such as `byte(X)`.
+    Cast(TypeRef),
+    /// Anything else, which has no type here.
+    Unknown,
+}
+
+impl Operand {
+    fn of(expression: &Expression) -> Operand {
+        match expression {
+            Expression::Identifier(name) if name.eq_ignore_ascii_case("self") => Operand::This,
+            Expression::Identifier(name) => Operand::Name(name.data.clone()),
+            Expression::ParentheticalExpression(inner) => Operand::of(&inner.data),
+            Expression::MemberAccess { operand, target } => {
+                Operand::Member(Box::new(Operand::of(&operand.data)), target.data.clone())
+            }
+            Expression::ArrayAccess { operand, .. } => {
+                Operand::Index(Box::new(Operand::of(&operand.data)))
+            }
+            Expression::Call { operand, .. } => Operand::Call(Box::new(Operand::of(&operand.data))),
+            Expression::GlobalCall { name, .. } => {
+                Operand::Call(Box::new(Operand::Name(name.data.clone())))
+            }
+            Expression::Cast { type_, .. } => Operand::Cast(type_.into()),
+            _ => Operand::Unknown,
+        }
+    }
+}
+
+/// A `switch` statement, with what's needed to tell whether it handles every
+/// value of an enum.
+#[derive(Debug, Clone)]
+pub struct SwitchRecord {
+    /// From the start of `switch` to the end of its subject.
+    pub span: AstSpan,
+    /// The scope the subject is in, to look names up in.
+    pub scope: ScopeId,
+    pub subject: Operand,
+    /// The expression of each `case`.
+    pub labels: Vec<Operand>,
+    pub has_default: bool,
+}
+
 /// About the class a file declares.
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
@@ -286,6 +347,40 @@ pub struct SymbolTable {
     references_by_symbol: Vec<Vec<usize>>,
     /// The scope of each function and state, by the start of its name.
     scopes_by_declaration: HashMap<usize, ScopeId>,
+    /// The properties `defaultproperties` assigns that the class doesn't
+    /// declare, which a parent class may.
+    unresolved_defaults: Vec<UnresolvedName>,
+    /// The names used in function bodies and states that the file doesn't
+    /// declare, which a parent class may.
+    unresolved_uses: Vec<UnresolvedUse>,
+    /// Where each function first uses a variable or non-static function that
+    /// the file declares.
+    instance_uses: HashMap<ScopeId, AstSpan>,
+    switches: Vec<SwitchRecord>,
+}
+
+/// A name that a file uses but doesn't declare.
+#[derive(Debug, Clone)]
+pub struct UnresolvedName {
+    pub name: Identifier,
+    pub span: AstSpan,
+}
+
+/// A name used in code that the file doesn't declare (and so may be inherited
+/// or declared in another class).
+#[derive(Debug, Clone)]
+pub struct UnresolvedUse {
+    pub name: Identifier,
+    pub span: AstSpan,
+    /// The scope it's used in: a function's or a state's.
+    pub scope: ScopeId,
+    /// The namespaces it could be found in, in order.
+    pub namespaces: Vec<Namespace>,
+    /// How it's used: `Read`, `Write` or `Call`.
+    pub kind: ReferenceKind,
+    /// Whether it needs an object: false for `Default.X` and `Static.F()`,
+    /// which a `static` function may use.
+    pub instance: bool,
 }
 
 impl SymbolTable {
@@ -298,6 +393,10 @@ impl SymbolTable {
             references: Vec::new(),
             references_by_symbol: Vec::new(),
             scopes_by_declaration: HashMap::new(),
+            unresolved_defaults: Vec::new(),
+            unresolved_uses: Vec::new(),
+            instance_uses: HashMap::new(),
+            switches: Vec::new(),
         };
         table.add_scope(ScopeKind::Class, None);
         table.declare_program(program);
@@ -385,6 +484,30 @@ impl SymbolTable {
         None
     }
 
+    /// The properties assigned in `defaultproperties` that the class doesn't
+    /// declare, in order. A parent class may declare them.
+    pub fn unresolved_default_properties(&self) -> &[UnresolvedName] {
+        &self.unresolved_defaults
+    }
+
+    /// The names used in code that the file doesn't declare, in order. A
+    /// parent class may declare them.
+    pub fn unresolved_uses(&self) -> &[UnresolvedUse] {
+        &self.unresolved_uses
+    }
+
+    /// Where the function with scope `scope` first uses an instance variable
+    /// or calls a non-static function that the file declares, if it does.
+    /// Names the file doesn't declare are in [`Self::unresolved_uses`].
+    pub fn instance_use(&self, scope: ScopeId) -> Option<AstSpan> {
+        self.instance_uses.get(&scope).copied()
+    }
+
+    /// The `switch` statements, in order.
+    pub fn switches(&self) -> &[SwitchRecord] {
+        &self.switches
+    }
+
     /// Every resolved reference, sorted by position.
     pub fn references(&self) -> &[Reference] {
         &self.references
@@ -420,6 +543,9 @@ impl SymbolTable {
         }
         for reference in &mut self.references {
             reference.span.line = Some(line_of(reference.span.start));
+        }
+        for switch in &mut self.switches {
+            switch.span.line = Some(line_of(switch.span.start));
         }
         if let Some(class) = &mut self.class {
             class.span.line = Some(line_of(class.span.start));
@@ -541,6 +667,7 @@ impl SymbolTable {
             types: f.types.iter().map(|t| t.type_).collect(),
             modifiers,
             has_body: f.body.is_some(),
+            return_type: f.return_type.as_ref().map(TypeRef::from),
         };
         let id = self.add(scope, &f.name, kind, access);
         let function_scope = self.add_scope(ScopeKind::Function(id), Some(scope));
@@ -777,15 +904,57 @@ impl Resolver<'_> {
         span: AstSpan,
         kind: ReferenceKind,
     ) {
+        self.refer_as(scope, namespaces, name, span, kind, true)
+    }
+
+    /// [`Self::refer`], saying whether the name needs an object (`instance`)
+    /// when it isn't found.
+    fn refer_as(
+        &mut self,
+        scope: ScopeId,
+        namespaces: &[Namespace],
+        name: &AstNode<Identifier>,
+        span: AstSpan,
+        kind: ReferenceKind,
+        instance: bool,
+    ) {
         let found = namespaces
             .iter()
             .find_map(|&ns| self.table.lookup(scope, ns, name));
         if let Some(symbol) = found {
+            if instance
+                && matches!(
+                    kind,
+                    ReferenceKind::Read | ReferenceKind::Write | ReferenceKind::Call
+                )
+                && matches!(self.table.scope(self.scope).kind, ScopeKind::Function(_))
+                && match &self.table.symbol(symbol).kind {
+                    SymbolKind::Variable { .. } => true,
+                    SymbolKind::Function { modifiers, .. } => {
+                        !modifiers.contains(&FunctionModifierType::Static)
+                    }
+                    _ => false,
+                }
+            {
+                self.table.instance_uses.entry(self.scope).or_insert(span);
+            }
             self.table.references.push(Reference {
                 symbol,
                 span,
                 text: name.string.clone(),
                 kind,
+            });
+        } else if matches!(
+            kind,
+            ReferenceKind::Read | ReferenceKind::Write | ReferenceKind::Call
+        ) {
+            self.table.unresolved_uses.push(UnresolvedUse {
+                name: name.data.clone(),
+                span,
+                scope: self.scope,
+                namespaces: namespaces.to_vec(),
+                kind,
+                instance,
             });
         }
     }
@@ -913,6 +1082,10 @@ impl Resolver<'_> {
                     data: Identifier::new(&a.name),
                     span,
                 };
+                let declared = self
+                    .table
+                    .lookup(ScopeId::CLASS, Namespace::Value, &name.data)
+                    .is_some();
                 self.refer(
                     ScopeId::CLASS,
                     &[Namespace::Value],
@@ -920,8 +1093,39 @@ impl Resolver<'_> {
                     span,
                     ReferenceKind::DefaultProperty,
                 );
+                if !declared {
+                    self.table.unresolved_defaults.push(UnresolvedName {
+                        name: name.data,
+                        span,
+                    });
+                }
             }
         }
+    }
+
+    fn record_switch(&mut self, statement: &AstNode<CodeStatement>, s: &SwitchStatement) {
+        let labels = s
+            .cases
+            .iter()
+            .filter_map(|case| match &case.type_ {
+                SwitchCaseType::Expression(label) => Some(Operand::of(&label.data)),
+                SwitchCaseType::Default => None,
+            })
+            .collect();
+        self.table.switches.push(SwitchRecord {
+            span: AstSpan {
+                start: statement.span.start,
+                end: s.predicate.span.end,
+                line: None,
+            },
+            scope: self.scope,
+            subject: Operand::of(&s.predicate.data),
+            labels,
+            has_default: s
+                .cases
+                .iter()
+                .any(|case| matches!(case.type_, SwitchCaseType::Default)),
+        });
     }
 
     fn body(&mut self, body: &AstNode<CodeStatementOrBlock>) {
@@ -969,6 +1173,7 @@ impl Resolver<'_> {
                 self.body(&f.body);
             }
             CodeStatement::Switch(s) => {
+                self.record_switch(statement, s);
                 self.expression(&s.predicate);
                 for case in &s.cases {
                     if let SwitchCaseType::Expression(label) = &case.type_ {
@@ -1037,12 +1242,13 @@ impl Resolver<'_> {
             Expression::DefaultAccess { operand, target }
                 if operand.as_ref().is_none_or(|o| is_self(o)) =>
             {
-                self.refer(
+                self.refer_as(
                     ScopeId::CLASS,
                     &[Namespace::Value],
                     target,
                     target.span,
                     ReferenceKind::Write,
+                    false,
                 );
                 true
             }
@@ -1062,12 +1268,13 @@ impl Resolver<'_> {
             Expression::StaticAccess {
                 operand: None,
                 target,
-            } => self.refer(
+            } => self.refer_as(
                 ScopeId::CLASS,
                 &[Namespace::Function],
                 target,
                 target.span,
                 ReferenceKind::Call,
+                false,
             ),
             _ => self.expression(operand),
         }
@@ -1212,22 +1419,24 @@ impl Resolver<'_> {
             }
             Expression::DefaultAccess { operand, target } => match operand {
                 Some(operand) if !is_self(operand) => self.expression(operand),
-                _ => self.refer(
+                _ => self.refer_as(
                     ScopeId::CLASS,
                     &[Namespace::Value],
                     target,
                     target.span,
                     ReferenceKind::Read,
+                    false,
                 ),
             },
             Expression::StaticAccess { operand, target } => match operand {
                 Some(operand) => self.expression(operand),
-                None => self.refer(
+                None => self.refer_as(
                     ScopeId::CLASS,
                     &[Namespace::Function],
                     target,
                     target.span,
                     ReferenceKind::Read,
+                    false,
                 ),
             },
             Expression::MemberAccess { operand, target } => {

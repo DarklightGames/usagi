@@ -1,7 +1,7 @@
 mod common;
 
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use common::builder::*;
 use common::index;
@@ -448,14 +448,14 @@ fn export(package: &Package, name: &str) -> usize {
         .unwrap()
 }
 
-fn scope(package: &Rc<Package>, name: &str) -> Scope {
+fn scope(package: &Arc<Package>, name: &str) -> Scope {
     Scope {
-        package: Rc::clone(package),
+        package: Arc::clone(package),
         export: export(package, name),
     }
 }
 
-fn props(packages: &Packages, package: &Rc<Package>, name: &str) -> Vec<Property> {
+fn props(packages: &Packages, package: &Arc<Package>, name: &str) -> Vec<Property> {
     packages
         .properties(package, export(package, name))
         .unwrap()
@@ -500,14 +500,33 @@ fn finding_packages() {
     let found = packages.get("BASE").unwrap();
     assert_eq!(found.name, "Base");
     // Read once.
-    assert!(Rc::ptr_eq(&found, &packages.get("base").unwrap()));
+    assert!(Arc::ptr_eq(&found, &packages.get("base").unwrap()));
     // Not there, or not a package: remembered too.
     assert!(packages.get("Nope").is_none());
     assert!(packages.get("Broken").is_none());
     assert!(packages.get("broken").is_none());
     // One added takes the place of one of the same name.
     let added = packages.add(Package::read(&dir.path().join("Base.u")).unwrap());
-    assert!(Rc::ptr_eq(&added, &packages.get("Base").unwrap()));
+    assert!(Arc::ptr_eq(&added, &packages.get("Base").unwrap()));
+}
+
+/// `Packages` is shared between threads, and threads that race to read a
+/// package all get the same one (scopes compare packages by identity).
+#[test]
+fn packages_are_shared_between_threads() {
+    fn assert_sync<T: Send + Sync>(_: &T) {}
+    let dir = TempDir::new().unwrap();
+    base(dir.path(), 29);
+    let packages = Packages::new(vec![SearchPath::from_pattern(dir.path(), "*.u")]);
+    assert_sync(&packages);
+    let found: Vec<Arc<Package>> = std::thread::scope(|scope| {
+        let threads: Vec<_> = (0..8)
+            .map(|_| scope.spawn(|| packages.get("Base").unwrap()))
+            .collect();
+        threads.into_iter().map(|t| t.join().unwrap()).collect()
+    });
+    assert!(found.iter().all(|p| Arc::ptr_eq(p, &found[0])));
+    assert!(Arc::ptr_eq(&found[0], &packages.get("Base").unwrap()));
 }
 
 #[test]

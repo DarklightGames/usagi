@@ -1,5 +1,6 @@
 //! Finding the files to check.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
@@ -12,6 +13,26 @@ use crate::config::Settings;
 /// directory are filtered by the include and exclude globs. Paths that don't
 /// exist are returned as errors.
 pub fn files(paths: &[PathBuf], settings: &Settings) -> (Vec<PathBuf>, Vec<String>) {
+    find(paths, &|path| is_selected(path, settings))
+}
+
+/// The `.uc` files under `paths` that `files` doesn't return, because of the
+/// include and exclude globs: the rest of the project, which is read only to
+/// know its classes.
+pub fn unselected(paths: &[PathBuf], settings: &Settings) -> Vec<PathBuf> {
+    let (selected, _) = files(paths, settings);
+    let selected: HashSet<PathBuf> = selected.into_iter().collect();
+    let (all, _) = all(paths);
+    all.into_iter().filter(|f| !selected.contains(f)).collect()
+}
+
+/// Every `.uc` file under `paths`, sorted and without duplicates, whatever the
+/// include and exclude globs say.
+pub fn all(paths: &[PathBuf]) -> (Vec<PathBuf>, Vec<String>) {
+    find(paths, &|_| true)
+}
+
+fn find(paths: &[PathBuf], selected: &dyn Fn(&Path) -> bool) -> (Vec<PathBuf>, Vec<String>) {
     let mut files = Vec::new();
     let mut errors = Vec::new();
     for path in paths {
@@ -26,9 +47,7 @@ pub fn files(paths: &[PathBuf], settings: &Settings) -> (Vec<PathBuf>, Vec<Strin
                         continue;
                     }
                 };
-                if entry.file_type().is_file()
-                    && is_source(entry.path())
-                    && is_selected(entry.path(), settings)
+                if entry.file_type().is_file() && is_source(entry.path()) && selected(entry.path())
                 {
                     files.push(entry.into_path());
                 }

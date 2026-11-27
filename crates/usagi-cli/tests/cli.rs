@@ -256,6 +256,517 @@ fn parse_outcomes() {
 }
 
 #[test]
+fn lint_statistics_describe_the_project() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", "class Object;\n"),
+        ("Core/Classes/Actor.uc", "class Actor extends Object;\n"),
+        ("Mod/Classes/Pawn.uc", "class Pawn extends Actor;\n"),
+        ("Mod/Classes/Lost.uc", "class Lost extends Gone.Away;\n"),
+        ("Mod/Classes/A.uc", "class A extends B;\n"),
+        ("Mod/Classes/B.uc", "class B extends A;\n"),
+        ("Mod/Classes/Dup.uc", "class Dup;\n"),
+        ("Mod/Other/Classes/Dup.uc", "class Dup;\n"),
+        ("Mod/Same/Classes/Dup.uc", "class Dup;\n"),
+        ("Loose.uc", "class Loose;\n"),
+    ]);
+    let output = usagi(dir.path())
+        .args(["lint", "--format", "quiet", "--statistics"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let project = &stdout[stdout.find("project:").expect("a project summary")..];
+    assert_eq!(
+        project,
+        "project: 10 classes\n\
+         \x20 classes that extend a class that isn't in the project: 1\n\
+         \x20   Gone.Away                                     1\n\
+         \x20 class Dup is in two packages: a bare name means Mod/Classes/Dup.uc, not Mod/Other/Classes/Dup.uc\n\
+         \x20 class Dup is in two packages: a bare name means Mod/Classes/Dup.uc, not Mod/Same/Classes/Dup.uc\n\
+         \x20 classes extend each other in a circle: A -> B\n"
+    );
+    // Without a project there's no summary, and the same lints are reported.
+    usagi(dir.path())
+        .args(["lint", "--format", "quiet", "--statistics", "--no-project"])
+        .assert()
+        .stdout(predicate::str::contains("project:").not());
+    // Nor without asking for statistics.
+    usagi(dir.path())
+        .args(["lint", "--format", "quiet"])
+        .assert()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn lint_statistics_report_repeated_classes_of_one_package() {
+    let dir = project(&[
+        ("Mod/Classes/Dup.uc", "class Dup;\n"),
+        ("Mod/Classes/Sub/Dup.uc", "class Dup;\n"),
+        ("Game/Mod/Classes/Dup.uc", "class Dup;\n"),
+    ]);
+    // Two roots: the first replaces the second's class of the same name.
+    usagi(dir.path())
+        .args(["lint", "--format", "quiet", "--statistics", "Mod", "Game"])
+        .assert()
+        .stdout(predicate::str::contains("project: 1 classes\n"))
+        .stdout(predicate::str::contains(
+            "class Dup is declared twice in one package: Mod/Classes/Dup.uc is used, Game/Mod/Classes/Dup.uc isn't",
+        ));
+}
+
+#[test]
+fn the_project_includes_files_that_are_not_linted() {
+    // `include` chooses what is linted; the classes the linted ones extend
+    // are still part of the project.
+    let dir = project(&[
+        ("usagi.toml", "include = [\"Mod/*\"]\n"),
+        ("Core/Classes/Object.uc", "class Object;\nvar int X;\n"),
+        ("Mod/Classes/Pawn.uc", "class Pawn extends Object;\n"),
+        ("Mod/Classes/Lost.uc", "class Lost extends Gone;\n"),
+        ("Core/Classes/Broken.uc", "class Broken extends {\n"),
+    ]);
+    let output = usagi(dir.path())
+        .args(["lint", "--format", "quiet", "--statistics"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let project = &stdout[stdout.find("project:").unwrap()..];
+    assert_eq!(
+        project,
+        "project: 3 classes\n\
+         \x20 classes that extend a class that isn't in the project: 1\n\
+         \x20   Gone                                          1\n"
+    );
+    // Only the files that are included are checked: the lints and the count
+    // of files don't change.
+    usagi(dir.path())
+        .args(["lint", "--format", "quiet", "--statistics", "--no-project"])
+        .assert()
+        .stdout(predicate::str::contains("project:").not());
+}
+
+const BASE: &str = "class Object;\nvar int Flags;\ndelegate OnTick();\n";
+const PAWN: &str = "class Pawn extends Object;\nvar int Own;\n\
+    defaultproperties\n{\n    Own=1\n    flags=2\n    OnTick=Foo.Bar\n    Typo=3\n}\n";
+
+#[test]
+fn undeclared_default_properties_are_opt_in() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", BASE),
+        ("Mod/Classes/Pawn.uc", PAWN),
+    ]);
+    let found =
+        "Mod/Classes/Pawn.uc:8:5: C017 `Typo` isn't declared in `Pawn` or any class it extends\n";
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        (
+            String::from_utf8(output.stdout).unwrap(),
+            output.status.code(),
+        )
+    };
+    // Not by default, or by `ALL`, a prefix or a category.
+    for selectors in [
+        &[][..],
+        &["--select", "ALL"],
+        &["--select", "C"],
+        &["--select", "correctness"],
+    ] {
+        assert_eq!(run(selectors), (String::new(), Some(0)), "{:?}", selectors);
+    }
+    // By its code or its name.
+    for selector in ["C017", "undeclared-default-property"] {
+        assert_eq!(run(&["--select", selector]), (found.to_string(), Some(1)));
+        assert_eq!(
+            run(&["--extend-select", selector]),
+            (found.to_string(), Some(1))
+        );
+    }
+    assert_eq!(
+        run(&["--select", "C017", "--no-project"]),
+        (String::new(), Some(0))
+    );
+    assert_eq!(
+        run(&["--select", "C017", "--ignore", "C017"]),
+        (String::new(), Some(0))
+    );
+    // The project is the files under the paths. `Mod` alone has no `Object`,
+    // so what `Pawn` may inherit is unknown; with `Core` too, it's known.
+    assert_eq!(run(&["--select", "C017", "Mod"]), (String::new(), Some(0)));
+    assert_eq!(run(&["--select", "C017", "Core"]), (String::new(), Some(0)));
+    assert_eq!(run(&["--select", "C017", "Mod", "Core"]).0, found);
+}
+
+#[test]
+fn non_exhaustive_switches_are_opt_in() {
+    let dir = project(&[
+        (
+            "Core/Classes/Object.uc",
+            "class Object;\nenum EColor { C_Red, C_Green };\nvar EColor Color;\n",
+        ),
+        (
+            "Mod/Classes/Pawn.uc",
+            "class Pawn extends Object;\nfunction F()\n{\n    switch (Color)\n    {\n        case C_Red:\n            break;\n    }\n}\n",
+        ),
+    ]);
+    let found = "Mod/Classes/Pawn.uc:4:5: S018 `switch` on `EColor` has no `default` and doesn't handle `C_Green`\n";
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    for selectors in [
+        &[][..],
+        &["--select", "S"],
+        &["--select", "suspicious"],
+        &["--select", "ALL"],
+    ] {
+        assert_eq!(run(selectors), "", "{:?}", selectors);
+    }
+    assert_eq!(run(&["--select", "S018"]), found);
+    assert_eq!(run(&["--select", "non-exhaustive-switch"]), found);
+    assert_eq!(run(&["--extend-select", "S018,C017"]), found);
+    assert_eq!(run(&["--select", "S018", "--no-project"]), "");
+}
+
+#[test]
+fn could_be_static_is_opt_in() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", "class Object;\nvar int Count;\n"),
+        (
+            "Mod/Classes/Pawn.uc",
+            "class Pawn extends Object;\nfunction Pure(int A) { A++; }\nfunction Impure() { Count = 1; }\n",
+        ),
+    ]);
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert_eq!(run(&["--select", "ALL"]), "");
+    assert_eq!(
+        run(&["--select", "S019"]),
+        "Mod/Classes/Pawn.uc:2:10: S019 `Pure` doesn't use the object it's called on, and could be `static`\n"
+    );
+    assert_eq!(run(&["--select", "S019", "--no-project"]), "");
+}
+
+#[test]
+fn undeclared_default_properties_by_configuration() {
+    let dir = project(&[
+        (
+            "usagi.toml",
+            "include = [\"Mod/*\"]\n[lint]\nextend-select = [\"C017\"]\n",
+        ),
+        ("Core/Classes/Object.uc", BASE),
+        ("Mod/Classes/Pawn.uc", PAWN),
+    ]);
+    // The parent is in a file that isn't linted, and is found all the same.
+    usagi(dir.path())
+        .args(["lint", "--format", "concise"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("Pawn.uc:8:5: C017 `Typo`"))
+        .stdout(predicate::str::contains("Flags").not())
+        .stdout(predicate::str::contains("OnTick").not());
+    let dir = project(&[
+        (
+            "usagi.toml",
+            "[[lint.per-path]]\npaths = [\"Mod/**\"]\nextend-select = [\"C017\"]\n",
+        ),
+        ("Core/Classes/Object.uc", BASE),
+        ("Mod/Classes/Pawn.uc", PAWN),
+    ]);
+    usagi(dir.path())
+        .args(["lint", "--format", "concise"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("Pawn.uc:8:5: C017 `Typo`"));
+}
+
+#[test]
+fn a_class_whose_parent_is_missing_is_not_reported() {
+    let dir = project(&[("Mod/Classes/Pawn.uc", &PAWN.replace("Object", "Elsewhere"))]);
+    usagi(dir.path())
+        .args(["lint", "--select", "C017"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn add_ignore_suppresses_a_lint_that_needs_the_project() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", BASE),
+        ("Mod/Classes/Pawn.uc", PAWN),
+    ]);
+    usagi(dir.path())
+        .args(["lint", "--select", "C017", "--add-ignore"])
+        .assert()
+        .code(0);
+    let text = fs::read_to_string(dir.path().join("Mod/Classes/Pawn.uc")).unwrap();
+    assert!(
+        text.contains("    // usagi: ignore[undeclared-default-property]\n    Typo=3"),
+        "{}",
+        text
+    );
+    // It's suppressed, and the comment isn't reported as unused.
+    usagi(dir.path())
+        .args(["lint", "--select", "C017,R016"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty());
+    usagi(dir.path())
+        .args(["lint", "--select", "R016"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty());
+}
+
+/// Classes in four packages, with one that extends a class that isn't there
+/// and two that extend each other.
+fn graph_project() -> TempDir {
+    project(&[
+        ("Core/Classes/Object.uc", "class Object;\n"),
+        ("Engine/Classes/Actor.uc", "class Actor extends Object;\n"),
+        ("Engine/Classes/Pawn.uc", "class Pawn extends Actor;\n"),
+        ("Mod/Classes/Hero.uc", "class Hero extends Pawn;\n"),
+        ("Mod/Classes/Boss.uc", "class Boss extends Hero;\n"),
+        ("Mod/Classes/Lost.uc", "class Lost extends Gone.Away;\n"),
+        ("Other/Classes/Helper.uc", "class Helper extends Actor;\n"),
+        ("Other/Classes/Cycle.uc", "class Cycle extends Cycle2;\n"),
+        ("Other/Classes/Cycle2.uc", "class Cycle2 extends Cycle;\n"),
+    ])
+}
+
+fn graph(dir: &Path, args: &[&str]) -> String {
+    let output = usagi(dir).arg("graph").args(args).output().unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn graph_draws_the_hierarchy_as_a_tree() {
+    let dir = graph_project();
+    assert_eq!(
+        graph(dir.path(), &[]),
+        "Cycle [Other] (extends itself, through its parents)\n\
+         Cycle2 [Other] (extends itself, through its parents)\n\
+         Gone.Away (not in the project)\n\
+         └── Lost [Mod]\n\
+         Object [Core]\n\
+         └── Actor [Engine]\n\
+         \x20   ├── Helper [Other]\n\
+         \x20   └── Pawn [Engine]\n\
+         \x20       └── Hero [Mod]\n\
+         \x20           └── Boss [Mod]\n"
+    );
+}
+
+#[test]
+fn graph_chooses_classes_and_how_far_to_go() {
+    let dir = graph_project();
+    let tree = |args: &[&str]| graph(dir.path(), args);
+    // Ancestors and descendants, unless one is asked for.
+    let both = "Object [Core]\n└── Actor [Engine]\n    └── Pawn [Engine]\n        └── Hero [Mod]\n            └── Boss [Mod]\n";
+    assert_eq!(tree(&["--class", "hero"]), both);
+    assert_eq!(tree(&["--class", "Mod.Hero"]), both);
+    assert_eq!(
+        tree(&["--class", "Hero", "--ancestors", "--descendants"]),
+        both
+    );
+    assert_eq!(
+        tree(&["--class", "Hero", "--ancestors"]),
+        "Object [Core]\n└── Actor [Engine]\n    └── Pawn [Engine]\n        └── Hero [Mod]\n"
+    );
+    assert_eq!(
+        tree(&["--class", "Hero", "--descendants"]),
+        "Hero [Mod]\n└── Boss [Mod]\n"
+    );
+    assert_eq!(
+        tree(&["--class", "Hero", "--depth", "1"]),
+        "Pawn [Engine]\n└── Hero [Mod]\n    └── Boss [Mod]\n"
+    );
+    // Several, and what's missing is shown.
+    assert_eq!(
+        tree(&["--class", "Boss,Lost", "--depth", "1"]),
+        "Gone.Away (not in the project)\n└── Lost [Mod]\nHero [Mod]\n└── Boss [Mod]\n"
+    );
+    // Only what's under the paths: `Pawn` isn't, and is missing.
+    assert_eq!(
+        graph(dir.path(), &["Mod"]),
+        "Gone.Away (not in the project)\n└── Lost [Mod]\nPawn (not in the project)\n└── Hero [Mod]\n    └── Boss [Mod]\n"
+    );
+    for args in [&["--class", "Nothing"][..], &["--class", "Mod.Nothing"]] {
+        usagi(dir.path())
+            .arg("graph")
+            .args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("no class named"));
+    }
+    for flag in ["--ancestors", "--descendants", "--depth=1"] {
+        usagi(dir.path()).args(["graph", flag]).assert().code(2);
+    }
+}
+
+#[test]
+fn graph_as_dot_and_mermaid() {
+    let dir = graph_project();
+    assert_eq!(
+        graph(
+            dir.path(),
+            &["--class", "Hero", "--descendants", "--format", "dot"]
+        ),
+        "digraph classes {\n\
+         \x20   rankdir=BT;\n\
+         \x20   node [shape=box, fontname=\"Helvetica\"];\n\
+         \x20   edge [arrowhead=empty];\n\
+         \x20   subgraph cluster_0 {\n\
+         \x20       label=\"Mod\";\n\
+         \x20       n0 [label=\"Boss\"];\n\
+         \x20       n1 [label=\"Hero\"];\n\
+         \x20   }\n\
+         \x20   n0 -> n1;\n\
+         }\n"
+    );
+    assert_eq!(
+        graph(dir.path(), &["--class", "Lost,Cycle", "--format", "dot"]),
+        "digraph classes {\n\
+         \x20   rankdir=BT;\n\
+         \x20   node [shape=box, fontname=\"Helvetica\"];\n\
+         \x20   edge [arrowhead=empty];\n\
+         \x20   subgraph cluster_0 {\n\
+         \x20       label=\"Mod\";\n\
+         \x20       n2 [label=\"Lost\"];\n\
+         \x20   }\n\
+         \x20   subgraph cluster_1 {\n\
+         \x20       label=\"Other\";\n\
+         \x20       n0 [label=\"Cycle\", color=red];\n\
+         \x20   }\n\
+         \x20   n1 [label=\"Gone.Away\", style=dashed];\n\
+         \x20   n2 -> n1;\n\
+         }\n"
+    );
+    assert_eq!(
+        graph(
+            dir.path(),
+            &["--class", "Lost,Cycle", "--format", "mermaid"]
+        ),
+        "flowchart BT\n\
+         \x20   subgraph p0[\"Mod\"]\n\
+         \x20       n2[\"Lost\"]\n\
+         \x20   end\n\
+         \x20   subgraph p1[\"Other\"]\n\
+         \x20       n0[\"Cycle\"]:::cycle\n\
+         \x20   end\n\
+         \x20   n1[\"Gone.Away\"]:::missing\n\
+         \x20   n2 --> n1\n\
+         \x20   classDef missing stroke-dasharray: 5 5\n\
+         \x20   classDef cycle stroke:red\n"
+    );
+}
+
+#[test]
+fn graph_as_json() {
+    let dir = graph_project();
+    let value: serde_json::Value =
+        serde_json::from_str(&graph(dir.path(), &["--class", "Lost", "--format", "json"])).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "nodes": [
+                {"id": 0, "kind": "missing", "name": "Gone.Away", "package": null, "path": null, "cycle": false},
+                {"id": 1, "kind": "class", "name": "Lost", "package": "Mod", "path": "Mod/Classes/Lost.uc", "cycle": false},
+            ],
+            "edges": [{"from": 1, "to": 0, "count": 1}],
+        })
+    );
+}
+
+#[test]
+fn graph_of_packages() {
+    let dir = graph_project();
+    assert_eq!(
+        graph(dir.path(), &["--packages"]),
+        "Core\nEngine -> Core (1)\nMod -> Engine (1)\nOther -> Engine (1)\n"
+    );
+    // Of the classes chosen: the cut ones don't depend on the others.
+    assert_eq!(
+        graph(
+            dir.path(),
+            &[
+                "--packages",
+                "--class",
+                "Boss",
+                "--ancestors",
+                "--depth",
+                "2"
+            ]
+        ),
+        "Engine\nMod -> Engine (1)\n"
+    );
+    assert_eq!(
+        graph(
+            dir.path(),
+            &["--packages", "--class", "Hero", "--format", "dot"]
+        ),
+        "digraph packages {\n\
+         \x20   rankdir=BT;\n\
+         \x20   node [shape=box, fontname=\"Helvetica\"];\n\
+         \x20   n0 [label=\"Core\"];\n\
+         \x20   n1 [label=\"Engine\"];\n\
+         \x20   n2 [label=\"Mod\"];\n\
+         \x20   n1 -> n0 [label=\"1\"];\n\
+         \x20   n2 -> n1 [label=\"1\"];\n\
+         }\n"
+    );
+    assert_eq!(
+        graph(
+            dir.path(),
+            &["--packages", "--class", "Hero", "--format", "mermaid"]
+        ),
+        "flowchart BT\n\
+         \x20   n0[\"Core\"]\n\
+         \x20   n1[\"Engine\"]\n\
+         \x20   n2[\"Mod\"]\n\
+         \x20   n1 -->|1| n0\n\
+         \x20   n2 -->|1| n1\n"
+    );
+    let value: serde_json::Value = serde_json::from_str(&graph(
+        dir.path(),
+        &["--packages", "--class", "Pawn", "--format", "json"],
+    ))
+    .unwrap();
+    assert_eq!(value["nodes"][0]["kind"], "package");
+    assert_eq!(value["edges"][0]["count"], 1);
+}
+
+#[test]
+fn graph_ignores_include_and_exclude() {
+    let dir = graph_project();
+    fs::write(
+        dir.path().join("usagi.toml"),
+        "include = [\"Mod/*\"]\nexclude = [\"Core/*\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        graph(dir.path(), &["--class", "Boss", "--ancestors"])
+            .lines()
+            .count(),
+        5
+    );
+}
+
+#[test]
 fn parse_ast() {
     let dir = project(&[("Bar.uc", CLEAN)]);
     usagi(dir.path())

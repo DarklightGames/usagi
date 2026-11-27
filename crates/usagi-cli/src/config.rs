@@ -510,6 +510,22 @@ impl Settings {
         })
     }
 
+    /// Whether a lint that needs the project (see
+    /// [`usagi_core::Lint::needs_project`]) is selected anywhere, so that the
+    /// project has to be indexed.
+    pub fn project_lints_enabled(&self) -> bool {
+        usagi_core::Lint::ALL
+            .iter()
+            .filter(|lint| lint.needs_project())
+            .any(|&lint| {
+                self.selection.is_enabled(lint)
+                    || self.per_path.iter().any(|(_, entry)| {
+                        LintSelection::new(entry.select.iter().map(String::as_str), [])
+                            .is_enabled(lint)
+                    })
+            })
+    }
+
     /// Whether `lint` is reported for the file at `path`.
     pub fn is_enabled(&self, path: &Path, lint: usagi_core::Lint) -> bool {
         let mut enabled = self.selection.is_enabled(lint);

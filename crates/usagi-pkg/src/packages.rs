@@ -4,10 +4,9 @@
 //! or struct's properties, through its superclasses, which may be in other
 //! packages.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::class::PropertyKind;
 use crate::{ObjectRef, Package, Result};
@@ -51,7 +50,7 @@ impl SearchPath {
 /// A struct, class, state or function: an export of a package.
 #[derive(Clone)]
 pub struct Scope {
-    pub package: Rc<Package>,
+    pub package: Arc<Package>,
     pub export: usize,
 }
 
@@ -68,7 +67,7 @@ impl std::fmt::Debug for Scope {
 
 impl PartialEq for Scope {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.package, &other.package) && self.export == other.export
+        Arc::ptr_eq(&self.package, &other.package) && self.export == other.export
     }
 }
 
@@ -139,7 +138,7 @@ impl Decl {
 /// What looking for a property's declaration found.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Lookup {
-    Found(Rc<Decl>),
+    Found(Arc<Decl>),
     /// The struct and its superclasses were all read, and none declares it.
     Missing,
     /// It isn't in what could be read, but a superclass couldn't be read.
@@ -149,7 +148,7 @@ pub enum Lookup {
 /// A struct's own properties, and its superclass.
 #[derive(Debug)]
 struct StructInfo {
-    properties: Vec<Rc<Decl>>,
+    properties: Vec<Arc<Decl>>,
     /// `Some(None)` if it has no superclass; `None` if it has one that
     /// couldn't be found.
     super_scope: Option<Option<Scope>>,
@@ -161,11 +160,11 @@ struct StructInfo {
 pub struct Packages {
     paths: Vec<SearchPath>,
     /// The files in each folder of `paths`, by lowercase name.
-    dirs: RefCell<HashMap<PathBuf, HashMap<String, PathBuf>>>,
+    dirs: Mutex<HashMap<PathBuf, HashMap<String, PathBuf>>>,
     /// Packages by lowercase name; `None` if it couldn't be read.
-    loaded: RefCell<HashMap<String, Option<Rc<Package>>>>,
-    structs: RefCell<HashMap<(String, usize), Rc<StructInfo>>>,
-    resolved: RefCell<HashMap<(String, usize), Option<Scope>>>,
+    loaded: RwLock<HashMap<String, Option<Arc<Package>>>>,
+    structs: RwLock<HashMap<(String, usize), Arc<StructInfo>>>,
+    resolved: RwLock<HashMap<(String, usize), Option<Scope>>>,
 }
 
 impl Packages {
@@ -179,34 +178,43 @@ impl Packages {
     }
 
     /// Adds a package that has been read, in place of any of the same name.
-    pub fn add(&self, package: Package) -> Rc<Package> {
-        let package = Rc::new(package);
+    pub fn add(&self, package: Package) -> Arc<Package> {
+        let package = Arc::new(package);
         self.loaded
-            .borrow_mut()
-            .insert(package.name.to_lowercase(), Some(Rc::clone(&package)));
+            .write()
+            .expect("lock")
+            .insert(package.name.to_lowercase(), Some(Arc::clone(&package)));
         package
     }
 
     /// The package named `name` (in any case): one added, or the file in
     /// the directories. `None` if there's none, or it can't be read.
-    pub fn get(&self, name: &str) -> Option<Rc<Package>> {
+    pub fn get(&self, name: &str) -> Option<Arc<Package>> {
         let key = name.to_lowercase();
-        if let Some(package) = self.loaded.borrow().get(&key) {
+        if let Some(package) = self.loaded.read().expect("lock").get(&key) {
             return package.clone();
         }
         let path = self.paths.iter().find_map(|search| {
             let file = format!("{}{}", key, search.extension.to_lowercase());
             self.find_file(&search.dir, &file)
         });
-        let package = path.and_then(|path| Package::read(&path).ok()).map(Rc::new);
-        self.loaded.borrow_mut().insert(key, package.clone());
-        package
+        let package = path
+            .and_then(|path| Package::read(&path).ok())
+            .map(Arc::new);
+        // Another thread may have read it meanwhile: keep the first, so that
+        // a package is one `Arc` (scopes compare packages by identity).
+        self.loaded
+            .write()
+            .expect("lock")
+            .entry(key)
+            .or_insert(package)
+            .clone()
     }
 
     /// The file in `dir` named `name` (lowercase), in any case. Each folder
     /// is listed once.
     fn find_file(&self, dir: &Path, name: &str) -> Option<PathBuf> {
-        let mut dirs = self.dirs.borrow_mut();
+        let mut dirs = self.dirs.lock().expect("lock");
         let files = dirs.entry(dir.to_path_buf()).or_insert_with(|| {
             std::fs::read_dir(dir)
                 .into_iter()
@@ -224,20 +232,23 @@ impl Packages {
     /// The export an object reference in `package` is: itself if it's an
     /// export, or the export an import resolves to. `None` for `None`, for
     /// a package, or for an import that doesn't resolve.
-    pub fn resolve(&self, package: &Rc<Package>, object: ObjectRef) -> Option<Scope> {
+    pub fn resolve(&self, package: &Arc<Package>, object: ObjectRef) -> Option<Scope> {
         match object {
             ObjectRef::Null => None,
             ObjectRef::Export(export) => Some(Scope {
-                package: Rc::clone(package),
+                package: Arc::clone(package),
                 export,
             }),
             ObjectRef::Import(import) => {
                 let key = (package.name.to_lowercase(), import);
-                if let Some(scope) = self.resolved.borrow().get(&key) {
+                if let Some(scope) = self.resolved.read().expect("lock").get(&key) {
                     return scope.clone();
                 }
                 let scope = self.resolve_import(package, import);
-                self.resolved.borrow_mut().insert(key, scope.clone());
+                self.resolved
+                    .write()
+                    .expect("lock")
+                    .insert(key, scope.clone());
                 scope
             }
         }
@@ -245,7 +256,7 @@ impl Packages {
 
     /// `ULinkerLoad::VerifyImport`, for an import that isn't a package. An
     /// import's outers can't loop: [`Package::read`] checks.
-    fn resolve_import(&self, package: &Rc<Package>, import: usize) -> Option<Scope> {
+    fn resolve_import(&self, package: &Arc<Package>, import: usize) -> Option<Scope> {
         let imp = &package.imports()[import];
         let ObjectRef::Import(outer) = imp.outer else {
             // A package: not an export.
@@ -284,10 +295,10 @@ impl Packages {
     /// The scope whose properties an export's tagged properties are: a
     /// class's own (its defaults), or otherwise its class's. `None` if the
     /// class can't be found.
-    pub fn scope_of(&self, package: &Rc<Package>, export: usize) -> Option<Scope> {
+    pub fn scope_of(&self, package: &Arc<Package>, export: usize) -> Option<Scope> {
         match package.exports()[export].class {
             ObjectRef::Null => Some(Scope {
-                package: Rc::clone(package),
+                package: Arc::clone(package),
                 export,
             }),
             class => self.resolve(package, class),
@@ -307,7 +318,7 @@ impl Packages {
                 .iter()
                 .find(|d| d.name.eq_ignore_ascii_case(name))
             {
-                return Lookup::Found(Rc::clone(decl));
+                return Lookup::Found(Arc::clone(decl));
             }
             match &info.super_scope {
                 Some(Some(parent)) => scope = parent.clone(),
@@ -321,7 +332,7 @@ impl Packages {
     /// The properties of `scope` and its superclasses, in the order
     /// `UStruct::SerializeBin` writes them: the struct's own, then its
     /// superclass's. `None` if one of them can't be read.
-    pub fn struct_properties(&self, scope: &Scope) -> Option<Vec<Rc<Decl>>> {
+    pub fn struct_properties(&self, scope: &Scope) -> Option<Vec<Arc<Decl>>> {
         let mut properties = Vec::new();
         let mut scope = scope.clone();
         for _ in 0..MAX_CHAIN {
@@ -336,13 +347,16 @@ impl Packages {
         None
     }
 
-    fn struct_info(&self, scope: &Scope) -> Option<Rc<StructInfo>> {
+    fn struct_info(&self, scope: &Scope) -> Option<Arc<StructInfo>> {
         let key = (scope.package.name.to_lowercase(), scope.export);
-        if let Some(info) = self.structs.borrow().get(&key) {
-            return Some(Rc::clone(info));
+        if let Some(info) = self.structs.read().expect("lock").get(&key) {
+            return Some(Arc::clone(info));
         }
-        let info = Rc::new(self.read_struct_info(scope).ok()??);
-        self.structs.borrow_mut().insert(key, Rc::clone(&info));
+        let info = Arc::new(self.read_struct_info(scope).ok()??);
+        self.structs
+            .write()
+            .expect("lock")
+            .insert(key, Arc::clone(&info));
         Some(info)
     }
 
@@ -364,7 +378,7 @@ impl Packages {
             let class = package.class_name(&package.exports()[export]);
             if PropertyKind::of_class(class).is_some() {
                 let decl = package.property_decl(export)?;
-                properties.push(Rc::new(Decl {
+                properties.push(Arc::new(Decl {
                     name: package
                         .name(package.exports()[export].object_name)
                         .to_string(),
@@ -384,7 +398,7 @@ impl Packages {
     }
 
     /// A declaration's type, with its inner properties and struct resolved.
-    fn type_of(&self, package: &Rc<Package>, kind: &PropertyKind, depth: usize) -> Type {
+    fn type_of(&self, package: &Arc<Package>, kind: &PropertyKind, depth: usize) -> Type {
         let inner = |inner: ObjectRef| -> Type {
             if depth > MAX_CHAIN {
                 return Type::Unknown;

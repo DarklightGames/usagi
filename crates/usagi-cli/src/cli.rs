@@ -44,6 +44,57 @@ pub enum Command {
     Build(BuildArgs),
     /// Inspect package files (`.u`, `.utx`, `.ut2`, ...).
     Pkg(PkgArgs),
+    /// Draw the project's class hierarchy, or how its packages depend on each
+    /// other.
+    Graph(GraphArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct GraphArgs {
+    /// Files and folders to read, with every `.uc` file under them (the
+    /// configuration's `include` and `exclude` don't apply). Default: the
+    /// current directory.
+    pub paths: Vec<PathBuf>,
+
+    /// Draw this class and its ancestors and descendants (see `--ancestors`,
+    /// `--descendants` and `--depth`), in place of every class. Written
+    /// `Class` or `Package.Class`, in any case. Can be repeated or
+    /// comma-separated.
+    #[arg(long, value_name = "CLASS", value_delimiter = ',')]
+    pub class: Vec<String>,
+
+    /// With `--class`: only the classes they extend.
+    #[arg(long, requires = "class")]
+    pub ancestors: bool,
+
+    /// With `--class`: only the classes that extend them.
+    #[arg(long, requires = "class")]
+    pub descendants: bool,
+
+    /// With `--class`: how many levels up and down to go.
+    #[arg(long, requires = "class", value_name = "N")]
+    pub depth: Option<usize>,
+
+    /// Draw packages and which depends on which (a class of one extends a
+    /// class of the other), in place of classes.
+    #[arg(long)]
+    pub packages: bool,
+
+    /// How to draw the graph.
+    #[arg(long, value_enum, default_value_t = GraphFormat::Tree)]
+    pub format: GraphFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum GraphFormat {
+    /// An indented tree, a class under the one it extends.
+    Tree,
+    /// Graphviz DOT, for `dot -Tsvg`.
+    Dot,
+    /// A Mermaid flowchart, which GitHub draws in Markdown.
+    Mermaid,
+    /// Nodes and edges, as JSON.
+    Json,
 }
 
 #[derive(Debug, Args)]
@@ -521,9 +572,15 @@ pub struct LintArgs {
     #[arg(long, value_enum, default_value_t = OutputFormat::Full)]
     pub format: OutputFormat,
 
-    /// Print how many problems each lint found.
+    /// Print how many problems each lint found, and about the project's
+    /// classes.
     #[arg(long)]
     pub statistics: bool,
+
+    /// Don't index the project's classes, which lints that look at other
+    /// classes and `--statistics` use.
+    #[arg(long)]
+    pub no_project: bool,
 
     /// Apply safe fixes to the files.
     #[arg(long)]

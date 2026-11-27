@@ -197,7 +197,12 @@ impl Suppressions {
                 None => "in this file",
             };
             for (i, selector) in directive.selectors.iter().enumerate() {
-                if !selector.known || selector.used {
+                // A lint that needs the project is checked after this, so
+                // that its suppression isn't known to be unused yet.
+                let later = Lint::ALL
+                    .iter()
+                    .any(|&l| l.needs_project() && selector_matches(&selector.text, l));
+                if !selector.known || selector.used || later {
                     continue;
                 }
                 let range = if all_unused {

@@ -45,6 +45,24 @@ usagi lint --format tsv --statistics <root> > lints.tsv
 
 `--statistics` prints the number of problems and files for each lint.
 
+### Lints that look at other classes
+
+A lint that needs the classes of the whole project (see
+[PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md)) is **opt-in**: only a selector
+that names it, by its code or its name, selects it. `ALL`, a code prefix and a
+category don't. They're marked "needs the project" in the list below.
+
+```sh
+usagi lint --extend-select C017 <root>
+```
+
+They run once every class under the paths is indexed, including the files
+that `include` and `exclude` skip, and `--no-project` turns them off. A
+lint reports a name only when the class's whole chain of parents is in the
+project: a class that extends one that isn't is never reported for what it
+may inherit. In the library, [`usagi_core::project_lint`] runs them on a
+[`Project`](usagi_core::Project); `parse_program` doesn't.
+
 ## Suppression comments
 
 A comment that starts with `usagi:` suppresses lints in the code itself:
@@ -88,7 +106,11 @@ brackets) or a selector that matches no lint is reported as S017
 
 C016 `class-name-mismatch` is checked by `check_file_name`, after parsing,
 which applies the suppressions too. Until it's called, a selector suppressing
-only C016 is reported as unused.
+only C016 is reported as unused. The lints that need the project are checked
+by `project_lint::lint`, which applies them too; a selector that names one is
+never reported as unused, because parsing can't tell. Such a lint is
+suppressed only by a selector that names it, as it's selected: `ignore[ALL]`
+and `ignore[correctness]` don't suppress it.
 
 ## Fixes
 
@@ -129,6 +151,7 @@ never applied from the command line; they are for an editor to offer.
 | C014 | `undeclared-replicated-member` | Error |  | A member in the replication block that isn't declared in the class itself. UE2 only lets a class replicate its own members. |
 | C015 | `return-form-mismatch` | Error |  | `return X;` in a function with no return type, or a bare `return;` in a function that has one. |
 | C016 | `class-name-mismatch` | Error |  | A class whose name differs from its file's name (without `.uc`), ignoring case. UCC rejects it. Only checked when linting files, since it needs the file name. |
+| C017 | `undeclared-default-property` | Warning |  | A property assigned in `defaultproperties` that the class doesn't declare, or any class it extends. Needs the project, and is opt-in. Only reported when every parent of the class is in the project. `Begin Object` blocks aren't checked, and neither are names that are declared but aren't variables (a `const`, an enum value). |
 
 ### Suspicious
 
@@ -151,6 +174,8 @@ never applied from the command line; they are for an editor to offer.
 | S015 | `shadowed-variable` | Warning |  | A local or argument with the same name as a variable or const of the class (or state). In a `static` function only consts count, since instance variables aren't accessible there. Arguments of a function without a body, such as a delegate or native function, aren't checked. |
 | S016 | `missing-return` | Warning |  | A function with a return type where some path reaches the end without `return`; UCC returns zero or `None` there. Understands `if`/`else`, `switch` with `default` (including fallthrough into a case that returns) and `while (true)`/`for (;;)` loops without `break`. |
 | S017 | `invalid-suppression` | Warning |  | A `usagi:` comment that is malformed, such as `usagi: ignore` without brackets, or a selector in one that matches no lint (see [Suppression comments](#suppression-comments)). |
+| S018 | `non-exhaustive-switch` | Warning |  | A `switch` on an enum with no `default` that has no `case` for some of the enum's values. The enum can be declared in the class or in any class it extends, and the subject can be a local, an argument, a variable (also a parent's, another object's, a struct's or an array element), what a function returns, or a cast to the enum. A bare `case` label is a value if the enum has one of that name, wherever the enum is declared: a class that only `dependson`s the enum's class sees it too, as in UCC. A `switch` whose subject's type isn't known, or with a `case` that isn't known to be a value of the enum (a literal, another enum's value, an expression), isn't reported. A `switch` with a `default` isn't reported, even if its cases leave out values. Needs the project, and is opt-in. |
+| S019 | `could-be-static` | Warning |  | A function that uses nothing of the object it's called on, so could be `static`: it names no variable or non-static function, and no `Self`, `Super` or `global`, whether declared in the class or inherited (`Default.X`, `Static.F()`, consts and static functions are fine). Only a class's own plain functions are reported: not `static`, `native`, `exec`, `latent`, `iterator` or `singular` functions, events, delegates, operators, state functions, functions with no body, functions that override or are overridden (changing them would change the signature), replicated functions, or functions used as a value (assigned to a delegate). A function that calls a non-static function isn't reported, even one that could itself be `static`. A name that can't be looked up, because a parent isn't in the project, stops the function being reported. Needs the project, and is opt-in. |
 
 ### Performance
 

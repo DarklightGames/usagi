@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::io::{self, Write};
 
 use serde_json::{Map, Value as Json, json};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use usagi_pkg::{Error, ObjectPattern, ObjectRef, Package, Packages, Property, Value};
 
@@ -150,7 +150,7 @@ impl Object {
     /// has them.
     pub(super) fn read(
         packages: &Packages,
-        package: &Rc<Package>,
+        package: &Arc<Package>,
         export: usize,
         wanted: &[String],
     ) -> Object {

@@ -7,7 +7,6 @@ Ideas that aren't implemented yet. For the lints that exist, see
 
 ### Per file
 
-* Non-exhaustive `switch` on an `enum` value, for enums declared in the file.
 * `[]` instead of `()` as the array index in a `defaultproperties` target.
 * Statements (`#exec`, `const`) before the class declaration. Parsing this
   is an accepted quirk (see [PERMISSIVE_PARSING.md](PERMISSIVE_PARSING.md)), so
@@ -24,15 +23,62 @@ Ideas that aren't implemented yet. For the lints that exist, see
 
 ### Needs a project-wide symbol table
 
+See [PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md) for the design.
+
 * Redundant `defaultproperties` values: a value that a subclass sets to the
-  same value its parent already has.
+  same value its parent already has (see below).
 * A non-`Actor` `Object` that holds references to `Actor`s.
-* Exhaustive `switch` checking for enums declared in other classes.
 * A `config` variable in a class that isn't `config` anywhere in its hierarchy.
-* A `defaultproperties` key that isn't declared anywhere in the hierarchy.
 * `simulated` outside an `Actor` subclass.
 * Argument types checked against function signatures, e.g. a string passed to
   `GotoState`.
+* An override whose signature differs from the original.
+* An unresolved class in `extends`, `class'X'` or `Spawn`.
+* A class that uses one from a package later in `EditPackages`, and cycles
+  between packages.
+* `private` and `protected` access across classes.
+
+### Redundant `defaultproperties` values: notes
+
+Not started. A class's real default for a property is its own last
+assignment, or else the nearest ancestor's, so the lint compares what a class
+assigns with what it would inherit, which needs every class's assignments
+across the hierarchy. Things to settle first:
+
+* **Cost.** Time should be small: for each key a class assigns, walk up to the
+  first ancestor that assigns it (a hash lookup per class, no merged copy of
+  every class's defaults). Memory is the worry: a game's `defaultproperties`
+  are large, so keeping every assignment's text in the project index would
+  cost more than the symbol tables do now. Keep, per assignment, only a span
+  and a hash of its normalized value (16 bytes or so), and compare the text on
+  a match; or build the table of one hierarchy at a time, from a class down.
+  Measure the index's memory before and after on a real tree.
+* **Equality.** `1`, `1.0` and `1.00`, `True` and `true`, names and strings
+  are different, struct values, `Foo(0)` and `Foo[0]` array elements, object
+  references with and without their class, and what a value means for the
+  property's type (an enum value or a byte). A value that can't be shown to be
+  equal must count as different: a false positive suggests removing a line
+  that changes behavior.
+* **What isn't a plain assignment.** `Begin Object` blocks and their
+  properties, a parent that sets the key in one and the child in another, and
+  properties of structs and dynamic arrays.
+* **Stock classes.** A parent that's only in a package has its defaults in the
+  package's tagged properties, which `usagi-pkg` reads (see
+  [ASSET_PIPELINE.md](ASSET_PIPELINE.md)), and the classes between have to be
+  chained too; do the source-only case first.
+* **Not always wrong.** A child may repeat a parent's value on purpose, so
+  that a change in the parent doesn't change the child: it is opt-in, like the
+  other lints that need the project (see [PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md)).
+  A fix would remove the line, which is only safe without a comment on it.
+
+### Needs a project-wide symbol table: commands
+
+* Package dependencies beyond `extends` in `usagi graph`: what a class
+  refers to (`class'X'`, struct and enum types, `Spawn`), once there's typing.
+* `usagi refs`: who overrides, calls, extends or refers to a class or
+  member.
+* Check `EditPackages` order before running UCC, and rebuild only the
+  packages a change affects.
 
 ## CLI
 

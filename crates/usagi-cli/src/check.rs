@@ -4,6 +4,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use pest::error::InputLocation;
+use usagi_core::SymbolTable;
 use usagi_core::source::LineIndex;
 use usagi_core::{
     Applicability, Lint, ParseMode, ParseOptions, ParsingError, ProgramError, ProgramErrorSeverity,
@@ -111,18 +112,51 @@ pub struct FileReport {
     pub fixed_bytes: Option<Vec<u8>>,
     /// With fixing: the number of fixes applied.
     pub fixed: usize,
+    /// The file's symbol table, when asked for (`CheckOptions::project`).
+    pub symbols: Option<SymbolTable>,
 }
 
 pub struct CheckOptions<'a> {
     pub strict: bool,
     pub lint: bool,
     pub ast: bool,
+    /// Keep each file's symbol table, to index the classes of a project.
+    pub project: bool,
     /// Apply safe fixes (in memory; the caller writes or diffs the result).
     pub fix: bool,
     /// Whether a lint is reported for a file.
     pub is_enabled: &'a (dyn Fn(&Path, Lint) -> bool + Sync),
     /// How many files to check at once.
     pub jobs: usize,
+}
+
+/// Adds the problems of the lints that look at other classes, which are
+/// found once the project is indexed, to the report of their file.
+pub fn add_project_errors(
+    report: &mut FileReport,
+    errors: &[ProgramError],
+    is_enabled: &dyn Fn(&Path, Lint) -> bool,
+) {
+    let index = LineIndex::new(&report.source);
+    for error in errors {
+        let Some(lint) = error.lint else { continue };
+        if !is_enabled(&report.path, lint) {
+            continue;
+        }
+        let mut problem = Problem::new(
+            Kind::Lint(lint),
+            error.message.clone(),
+            &report.source,
+            &index,
+            error.span.start,
+            error.span.end,
+        );
+        problem.is_error = error.severity == ProgramErrorSeverity::Error;
+        report.problems.push(problem);
+    }
+    report
+        .problems
+        .sort_by_key(|p| (p.start, p.end, p.kind.code()));
 }
 
 pub fn check_file(path: &Path, options: &CheckOptions) -> FileReport {
@@ -138,6 +172,7 @@ pub fn check_file(path: &Path, options: &CheckOptions) -> FileReport {
                 original: None,
                 fixed_bytes: None,
                 fixed: 0,
+                symbols: None,
             };
         }
     };
@@ -162,7 +197,7 @@ pub fn check_file(path: &Path, options: &CheckOptions) -> FileReport {
             options,
         )
     }));
-    let (outcome, problems, ast) = match result {
+    let (outcome, problems, ast, symbols) = match result {
         Ok(result) => result,
         Err(payload) => {
             let message = payload
@@ -171,7 +206,7 @@ pub fn check_file(path: &Path, options: &CheckOptions) -> FileReport {
                 .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_else(|| "the parser panicked".to_string());
             let problem = Problem::at(Kind::Panic, message, &source, 0, 0);
-            (Outcome::Panic, vec![problem], None)
+            (Outcome::Panic, vec![problem], None, None)
         }
     };
     FileReport {
@@ -183,6 +218,7 @@ pub fn check_file(path: &Path, options: &CheckOptions) -> FileReport {
         ast,
         fixed_bytes,
         fixed,
+        symbols,
     }
 }
 
@@ -234,7 +270,7 @@ fn check_source(
     bytes: &[u8],
     source: &str,
     options: &CheckOptions,
-) -> (Outcome, Vec<Problem>, Option<String>) {
+) -> (Outcome, Vec<Problem>, Option<String>, Option<SymbolTable>) {
     let mode = if options.strict {
         ParseMode::Strict
     } else {
@@ -278,7 +314,12 @@ fn check_source(
                 }
             }
             let ast = options.ast.then(|| format!("{:#?}", result.program));
-            (outcome, problems, ast)
+            (
+                outcome,
+                problems,
+                ast,
+                options.project.then_some(result.symbols),
+            )
         }
         Err(ParsingError::Strict(errors)) => {
             let problems = errors
@@ -289,7 +330,7 @@ fn check_source(
                     p
                 })
                 .collect();
-            (Outcome::StrictError, problems, None)
+            (Outcome::StrictError, problems, None, None)
         }
         Err(ParsingError::PestError(e)) => {
             let (start, end) = match e.location {
@@ -298,11 +339,11 @@ fn check_source(
             };
             let message = e.variant.message().to_string();
             let problem = Problem::new(Kind::SyntaxError, message, source, &index, start, end);
-            (Outcome::SyntaxError, vec![problem], None)
+            (Outcome::SyntaxError, vec![problem], None, None)
         }
         Err(other) => {
             let problem = Problem::at(Kind::SyntaxError, format!("{:?}", other), source, 0, 0);
-            (Outcome::SyntaxError, vec![problem], None)
+            (Outcome::SyntaxError, vec![problem], None, None)
         }
     }
 }
@@ -376,6 +417,33 @@ pub fn check_all_with(
             .sort_by_key(|p| (p.start, p.end, p.kind.code()));
     }
     Ok(reports)
+}
+
+/// Reads the classes of `files`, which aren't being checked: each one's
+/// symbol table, leaving out a file that can't be read or parsed.
+pub fn index_all(files: &[PathBuf], jobs: usize) -> Result<Vec<(PathBuf, SymbolTable)>, String> {
+    use rayon::prelude::*;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(jobs.max(1))
+        .start_handler(|_| lower_priority())
+        .stack_size(STACK_SIZE)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let options = ParseOptions {
+        mode: ParseMode::Permissive,
+    };
+    Ok(pool.install(|| {
+        files
+            .par_iter()
+            .filter_map(|path| {
+                let bytes = std::fs::read(path).ok()?;
+                let parsed =
+                    panic::catch_unwind(AssertUnwindSafe(|| parse_bytes(&bytes, &options)));
+                let symbols = parsed.ok()?.ok()?.result.symbols;
+                Some((path.clone(), symbols))
+            })
+            .collect()
+    }))
 }
 
 /// Lowers the calling thread's scheduling priority (and that of the threads
