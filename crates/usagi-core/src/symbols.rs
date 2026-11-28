@@ -10,7 +10,7 @@
 //! All spans are byte offsets into the file.
 
 use crate::ast::*;
-use crate::flow::UnassignedRead;
+use crate::flow::{FlowProblem, UnassignedRead};
 use std::collections::HashMap;
 
 /// Identifies a [`Symbol`] in its [`SymbolTable`].
@@ -359,6 +359,7 @@ pub struct SymbolTable {
     instance_uses: HashMap<ScopeId, AstSpan>,
     switches: Vec<SwitchRecord>,
     unassigned_reads: Vec<UnassignedRead>,
+    flow_problems: Vec<FlowProblem>,
 }
 
 /// A name that a file uses but doesn't declare.
@@ -400,6 +401,7 @@ impl SymbolTable {
             instance_uses: HashMap::new(),
             switches: Vec::new(),
             unassigned_reads: Vec::new(),
+            flow_problems: Vec::new(),
         };
         table.add_scope(ScopeKind::Class, None);
         table.declare_program(program);
@@ -518,6 +520,12 @@ impl SymbolTable {
         &self.unassigned_reads
     }
 
+    /// The problems the flow pass found in the file's functions by itself,
+    /// which the visitor reports (see [`crate::flow`]).
+    pub fn flow_problems(&self) -> &[FlowProblem] {
+        &self.flow_problems
+    }
+
     /// Every resolved reference, sorted by position.
     pub fn references(&self) -> &[Reference] {
         &self.references
@@ -559,6 +567,9 @@ impl SymbolTable {
         }
         for read in &mut self.unassigned_reads {
             read.span.line = Some(line_of(read.span.start));
+        }
+        for problem in &mut self.flow_problems {
+            problem.span.line = Some(line_of(problem.span.start));
         }
         if let Some(class) = &mut self.class {
             class.span.line = Some(line_of(class.span.start));
@@ -1041,8 +1052,9 @@ impl Resolver<'_> {
                     FunctionBodyStatement::CodeStatement(s) => r.statement(s),
                 }
             }
-            let reads = crate::flow::unassigned_reads(r.table, scope, body);
-            r.table.unassigned_reads.extend(reads);
+            let findings = crate::flow::analyze(r.table, scope, body);
+            r.table.unassigned_reads.extend(findings.reads);
+            r.table.flow_problems.extend(findings.problems);
         });
     }
 

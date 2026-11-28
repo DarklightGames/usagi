@@ -1913,3 +1913,103 @@ fn redundant_default_return() {
         .unwrap();
     assert!(error.fix.is_none());
 }
+
+/// The `(line, text)` of each problem of the lint `code` in `source`.
+#[track_caller]
+fn found_by(code: &str, source: &str) -> Vec<(usize, String)> {
+    let result = parse_program(source).unwrap_or_else(|e| panic!("{}\n{:?}", source, e));
+    result
+        .errors
+        .iter()
+        .filter(|e| e.lint.is_some_and(|l| l.code() == code))
+        .map(|e| {
+            (
+                e.span.line.unwrap(),
+                source[e.span.start..e.span.end].to_string(),
+            )
+        })
+        .collect()
+}
+
+/// A class with a function `F(Actor P, Actor Q)` whose body is `body`, with
+/// `locals` declared first; lines count from the body's first.
+#[track_caller]
+fn found_in(code: &str, locals: &str, body: &str) -> Vec<(usize, String)> {
+    let source = format!(
+        "class Foo extends Actor;\nvar Actor Member;\nfunction F(Actor P, Actor Q)\n{{\n{}\n{}\n}}\n",
+        locals, body
+    );
+    let skip = 4 + locals.lines().count();
+    found_by(code, &source)
+        .into_iter()
+        .map(|(line, text)| (line - skip, text))
+        .collect()
+}
+
+fn at(found: &[(usize, &str)]) -> Vec<(usize, String)> {
+    found.iter().map(|&(l, t)| (l, t.to_string())).collect()
+}
+
+#[test]
+fn known_none_access() {
+    let c021 = |body: &str| found_in("C021", "local Actor L;\nlocal bool B;", body);
+    // In the branch that knows it's `None`, and after `&&` and `||`.
+    assert_eq!(
+        c021("if (P == None) P.Destroy();\nif (None == Q) { Q.Tag = 'X'; }"),
+        at(&[(1, "P"), (2, "Q")])
+    );
+    assert_eq!(
+        c021("if (P != None || P.bHidden) {}\nif (Q == None && Q.bHidden) {}"),
+        at(&[(1, "P"), (2, "Q")])
+    );
+    assert_eq!(
+        c021("if (P != None) {} else P.Destroy();\nif (!(Q != None)) Q.Destroy();"),
+        at(&[(1, "P"), (2, "Q")])
+    );
+    // `L = None` makes it `None`, and each use is reported.
+    assert_eq!(
+        c021("L = None;\nL.Destroy();\nL.Destroy();\nB = (P == None) && P.bHidden;"),
+        at(&[(2, "L"), (3, "L"), (4, "P")])
+    );
+    // `default.` and `static.` use the object too.
+    assert_eq!(
+        c021("if (P == None) B = P.default.bHidden;\nif (Q == None) Q.static.StaticSaveConfig();"),
+        at(&[(1, "P"), (2, "Q")])
+    );
+    // What isn't known to be `None` isn't reported.
+    assert!(
+        c021(
+            "if (P == None || P.bHidden) {}\n\
+             if (P != None && P.bHidden) {}\n\
+             if (P == None) return;\nP.Destroy();\n\
+             if (Q == None) Q = Spawn(class'Actor');\nQ.Destroy();\n\
+             L = None;\nif (B) L = P;\nL.Destroy();\n\
+             L = None;\nSetL(L);\nL.Destroy();\n\
+             if (Member == None) Member.Destroy();\n\
+             if (P.Owner == None) P.Owner.Destroy();\n\
+             if (P == Q) P.Destroy();\n\
+             if (P == None) return;\nreturn;\nif (P == None) P.Destroy();"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn known_none_access_in_loops() {
+    let c021 = |body: &str| found_in("C021", "local Actor L;\nlocal int I;", body);
+    // Known at the loop's head only if known on every way in.
+    assert!(c021("L = None;\nwhile (I < 3) { L.Destroy(); L = P; I++; }").is_empty());
+    assert_eq!(
+        c021("L = None;\nwhile (I < 3) { L.Destroy(); I++; }"),
+        at(&[(2, "L")])
+    );
+    assert!(c021("L = None;\nwhile (I < 3) { I++; L = P; }\nL.Destroy();").is_empty());
+    assert_eq!(
+        c021("while (P == None) P.Destroy();\ndo { I++; } until (Q != None);\nQ.Destroy();"),
+        at(&[(1, "P")])
+    );
+    assert_eq!(
+        c021("for (I = 0; P == None; I++) P.Destroy();\ndo I++; until (Q == None);\nQ.Destroy();"),
+        at(&[(1, "P"), (3, "Q")])
+    );
+}

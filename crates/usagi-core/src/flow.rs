@@ -1,20 +1,28 @@
-//! Which locals may have been assigned at each point of a function body: a
-//! small dataflow pass over the AST, run while the symbol table is built, that
-//! finds the reads of a local that no assignment can reach (C019
-//! `unassigned-object-local`).
+//! A small dataflow pass over each function body, run while the symbol table
+//! is built. It follows, at each point of the function:
+//!
+//! - which locals may have been assigned, and the calls they were given to
+//!   that may have assigned them (an `out` argument), for C019
+//!   `unassigned-object-local`;
+//! - which locals and arguments are known to be `None`, from a comparison
+//!   with `None` or an assignment of it, for C021 `known-none-access`.
 //!
 //! The pass knows the file and nothing else, so a call that a local is given
-//! to may assign it (an `out` argument) or not. It records such calls with the
-//! read, and the project lint looks their declarations up: the read is a
-//! problem only if none of them can assign the local.
+//! to may assign it (an `out` argument) or not. For C019 it records
+//! such calls with the read, and the project lint looks their declarations
+//! up: the read is a problem only if none of them can assign the local. The
+//! other lints treat such a call as assigning what it's given.
 //!
-//! The state at each point is, for each local, whether an assignment may have
-//! reached it, and the calls that may have assigned it. Paths join by union,
-//! and loops are run until their state stops growing. Code after a `return`,
-//! `break` or `continue` is unreachable, and nothing there is recorded. A
-//! function with `goto` or a label isn't looked at.
+//! A condition leaves one state for when it's true and one for when it's
+//! false, so that `if (P == None)` knows `P` is `None` in its body, and
+//! `&&` and `||` are followed as they short-circuit. Paths join: what may
+//! have happened by union, what is known by intersection. Loops are run until
+//! their state stops changing. Code after a `return`, `break` or `continue`
+//! is unreachable, and nothing there is recorded. A function with `goto` or a
+//! label isn't looked at.
 
 use crate::ast::*;
+use crate::lint::Lint;
 use crate::symbols::{Namespace, Operand, ScopeId, SymbolId, SymbolKind, SymbolTable, TypeRef};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -32,13 +40,30 @@ pub struct UnassignedRead {
     pub calls: Vec<(Operand, usize)>,
 }
 
+/// A problem the pass finds by itself, without other classes.
+#[derive(Debug, Clone)]
+pub struct FlowProblem {
+    pub lint: Lint,
+    pub message: String,
+    pub span: AstSpan,
+}
+
+/// What the pass finds in a function.
+#[derive(Debug, Default)]
+pub(crate) struct Findings {
+    pub reads: Vec<UnassignedRead>,
+    pub problems: Vec<FlowProblem>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 struct State {
     reachable: bool,
-    /// The locals an assignment may have reached.
+    /// The variables an assignment may have reached.
     assigned: BTreeSet<SymbolId>,
-    /// The calls that may have assigned each local.
+    /// The calls that may have assigned each of them.
     pending: BTreeMap<SymbolId, BTreeSet<usize>>,
+    /// The locals and arguments known to be `None`.
+    none: BTreeSet<SymbolId>,
 }
 
 impl State {
@@ -63,17 +88,23 @@ impl State {
             return;
         }
         self.assigned.extend(other.assigned.iter().copied());
-        for (local, calls) in &other.pending {
+        for (symbol, calls) in &other.pending {
             self.pending
-                .entry(*local)
+                .entry(*symbol)
                 .or_default()
                 .extend(calls.iter().copied());
         }
+        self.none.retain(|symbol| other.none.contains(symbol));
     }
 
     fn joined(mut self, other: &State) -> State {
         self.join(other);
         self
+    }
+
+    /// Forgets what's known of `symbol`'s value, when something may change it.
+    fn forget(&mut self, symbol: SymbolId) {
+        self.none.remove(&symbol);
     }
 }
 
@@ -101,16 +132,14 @@ struct Flow<'t> {
     /// The latest finding at each read, by its start: the last visit is the
     /// one with the most complete state.
     reads: BTreeMap<usize, Option<UnassignedRead>>,
+    /// The latest problem at each use of a variable, by its start,
+    /// likewise.
+    problems: BTreeMap<usize, Option<FlowProblem>>,
 }
 
-/// The reads of a local in `body`, the body of the function whose scope is
-/// `scope`, that no assignment reaches. Only locals that may hold an object
-/// are tracked: those of a named type or `class<...>`, and not arrays.
-pub(crate) fn unassigned_reads(
-    table: &SymbolTable,
-    scope: ScopeId,
-    body: &FunctionBody,
-) -> Vec<UnassignedRead> {
+/// What the pass finds in `body`, the body of the function whose scope is
+/// `scope`.
+pub(crate) fn analyze(table: &SymbolTable, scope: ScopeId, body: &FunctionBody) -> Findings {
     let statements: Vec<&AstNode<CodeStatement>> = body
         .statements
         .iter()
@@ -120,7 +149,7 @@ pub(crate) fn unassigned_reads(
         })
         .collect();
     if statements.iter().any(|s| has_jump(s)) {
-        return Vec::new();
+        return Findings::default();
     }
     // A static array's size may be a const the file doesn't declare, which
     // leaves it unknown in the table.
@@ -144,11 +173,15 @@ pub(crate) fn unassigned_reads(
         calls: Vec::new(),
         call_ids: HashMap::new(),
         reads: BTreeMap::new(),
+        problems: BTreeMap::new(),
     };
     for statement in statements {
         flow.statement(statement);
     }
-    flow.reads.into_values().flatten().collect()
+    Findings {
+        reads: flow.reads.into_values().flatten().collect(),
+        problems: flow.problems.into_values().flatten().collect(),
+    }
 }
 
 /// Whether there's a `goto` or a label in `statement`.
@@ -185,31 +218,60 @@ fn unparenthesize(mut expression: &AstNode<Expression>) -> &AstNode<Expression> 
     expression
 }
 
+fn is_none_literal(expression: &AstNode<Expression>) -> bool {
+    matches!(&unparenthesize(expression).data,
+        Expression::Literal(literal) if matches!(literal.data, Literal::None))
+}
+
 impl Flow<'_> {
-    /// The local that `expression` names, if it's a bare name of a tracked
-    /// local.
-    fn local(&self, expression: &AstNode<Expression>) -> Option<SymbolId> {
+    /// The local, argument or class variable that `expression` names, if it's
+    /// a bare name of one.
+    fn variable(&self, expression: &AstNode<Expression>) -> Option<SymbolId> {
         let Expression::Identifier(name) = &unparenthesize(expression).data else {
             return None;
         };
         let symbol = self.table.lookup(self.scope, Namespace::Value, name)?;
-        match &self.table.symbol(symbol).kind {
-            SymbolKind::Local {
-                type_: TypeRef::Named(_) | TypeRef::Class(_),
-                ..
-            } if !self.arrays.contains(&symbol) => Some(symbol),
-            _ => None,
-        }
+        matches!(
+            self.table.symbol(symbol).kind,
+            SymbolKind::Local { .. } | SymbolKind::Argument { .. } | SymbolKind::Variable { .. }
+        )
+        .then_some(symbol)
     }
 
-    fn read(&mut self, local: SymbolId, span: AstSpan, extra: Option<usize>) {
-        if !self.state.reachable {
+    fn kind(&self, symbol: SymbolId) -> &SymbolKind {
+        &self.table.symbol(symbol).kind
+    }
+
+    /// Whether the reads of `symbol` that no assignment reaches are recorded:
+    /// a local that may hold an object.
+    fn is_tracked_local(&self, symbol: SymbolId) -> bool {
+        !self.arrays.contains(&symbol)
+            && matches!(
+                self.kind(symbol),
+                SymbolKind::Local {
+                    type_: TypeRef::Named(_) | TypeRef::Class(_),
+                    ..
+                }
+            )
+    }
+
+    /// Whether `None` facts are kept for `symbol`: a local or an argument,
+    /// which nothing but the function itself changes.
+    fn is_local_or_argument(&self, symbol: SymbolId) -> bool {
+        matches!(
+            self.kind(symbol),
+            SymbolKind::Local { .. } | SymbolKind::Argument { .. }
+        )
+    }
+
+    fn read(&mut self, symbol: SymbolId, span: AstSpan, extra: Option<usize>) {
+        if !self.state.reachable || !self.is_tracked_local(symbol) {
             return;
         }
-        let finding = (!self.state.assigned.contains(&local)).then(|| {
-            let ids = self.state.pending.get(&local).into_iter().flatten();
+        let finding = (!self.state.assigned.contains(&symbol)).then(|| {
+            let ids = self.state.pending.get(&symbol).into_iter().flatten();
             UnassignedRead {
-                local,
+                local: symbol,
                 span,
                 scope: self.scope,
                 calls: ids
@@ -221,8 +283,32 @@ impl Flow<'_> {
         self.reads.insert(span.start, finding);
     }
 
-    fn assign(&mut self, local: SymbolId) {
-        self.state.assigned.insert(local);
+    /// `symbol` is assigned something other than `None`.
+    fn assign(&mut self, symbol: SymbolId) {
+        self.state.assigned.insert(symbol);
+        self.state.forget(symbol);
+    }
+
+    /// The object in `operand` is used (`operand.X`, `operand.default.X`):
+    /// reports it if it's known to be `None`.
+    fn dereference(&mut self, operand: &AstNode<Expression>) {
+        self.expression(operand);
+        let Some(symbol) = self.variable(operand) else {
+            return;
+        };
+        if !self.state.reachable {
+            return;
+        }
+        let name = self.table.symbol(symbol).name.as_str();
+        let span = unparenthesize(operand).span;
+        // A use doesn't change what's known to be `None`, so each use is
+        // reported.
+        let problem = self.state.none.contains(&symbol).then(|| FlowProblem {
+            lint: Lint::KnownNoneAccess,
+            message: format!("`{}` is `None` here, so using it is an Accessed None", name),
+            span,
+        });
+        self.problems.insert(span.start, problem);
     }
 
     /// The id of the call giving the argument that starts at `start`, its
@@ -300,8 +386,8 @@ impl Flow<'_> {
                 // An iterator fills in the variables it's given.
                 if let Expression::Call { arguments, .. } = &unparenthesize(&f.predicate).data {
                     for argument in arguments.expressions.iter().flatten() {
-                        if let Some(local) = self.local(argument) {
-                            self.assign(local);
+                        if let Some(symbol) = self.variable(argument) {
+                            self.assign(symbol);
                         }
                     }
                 }
@@ -312,8 +398,9 @@ impl Flow<'_> {
             }
             CodeStatement::While(w) => {
                 self.state = self.run_loop(|flow, exit| {
-                    flow.expression(&w.predicate);
-                    exit.join(&flow.state);
+                    let (yes, no) = flow.condition(&w.predicate);
+                    exit.join(&no);
+                    flow.state = yes;
                     flow.body(&w.body);
                 });
             }
@@ -323,9 +410,10 @@ impl Flow<'_> {
                 }
                 self.state = self.run_loop(|flow, exit| {
                     if let Some(predicate) = &f.predicate {
-                        flow.expression(predicate);
+                        let (yes, no) = flow.condition(predicate);
+                        exit.join(&no);
+                        flow.state = yes;
                     }
-                    exit.join(&flow.state);
                     flow.body(&f.body);
                     let continues = flow.jumps.last().expect("in a loop").continues.clone();
                     flow.state.join(&continues);
@@ -339,24 +427,29 @@ impl Flow<'_> {
                     flow.body(&d.body);
                     let continues = flow.jumps.last().expect("in a loop").continues.clone();
                     flow.state.join(&continues);
-                    if let Some(predicate) = &d.predicate {
-                        flow.expression(predicate);
+                    match &d.predicate {
+                        // `until` leaves the loop when it's true.
+                        Some(predicate) => {
+                            let (yes, no) = flow.condition(predicate);
+                            exit.join(&yes);
+                            flow.state = no;
+                        }
+                        None => exit.join(&flow.state),
                     }
-                    exit.join(&flow.state);
                 });
             }
             CodeStatement::Conditional(c) => {
-                self.expression(&c.if_statement.predicate);
-                let mut after = State::unreachable();
-                let mut otherwise = self.state.clone();
+                let (yes, mut otherwise) = self.condition(&c.if_statement.predicate);
+                self.state = yes;
                 if let Some(body) = &c.if_statement.body {
                     self.body(body);
                 }
-                after.join(&self.state);
+                let mut after = std::mem::take(&mut self.state);
                 for elif in &c.elif_statements {
                     self.state = otherwise;
-                    self.expression(&elif.predicate);
-                    otherwise = self.state.clone();
+                    let (yes, no) = self.condition(&elif.predicate);
+                    otherwise = no;
+                    self.state = yes;
                     self.body(&elif.body);
                     after.join(&self.state);
                 }
@@ -395,11 +488,123 @@ impl Flow<'_> {
         }
     }
 
+    /// The variable `expression` compares with `None`, whether it's `==`
+    /// (rather than `!=`), and the two sides.
+    #[allow(clippy::type_complexity)]
+    fn none_comparison<'e>(
+        &self,
+        expression: &'e AstNode<Expression>,
+    ) -> Option<(
+        SymbolId,
+        bool,
+        &'e AstNode<Expression>,
+        &'e AstNode<Expression>,
+    )> {
+        let Expression::DyadicExpression { lhs, verb, rhs } = &unparenthesize(expression).data
+        else {
+            return None;
+        };
+        let equal = match verb {
+            DyadicVerb::CompareEqual => true,
+            DyadicVerb::CompareNotEqual => false,
+            _ => return None,
+        };
+        let variable = if is_none_literal(rhs) {
+            lhs
+        } else if is_none_literal(lhs) {
+            rhs
+        } else {
+            return None;
+        };
+        Some((self.variable(variable)?, equal, lhs, rhs))
+    }
+
+    /// Whether `expression` is followed by [`Self::condition`]: it's a
+    /// logical operation, or compares something with `None`.
+    fn is_logical(&self, expression: &AstNode<Expression>) -> bool {
+        match &unparenthesize(expression).data {
+            Expression::MonadicPreExpression {
+                verb: MonadicVerb::Not,
+                ..
+            } => true,
+            Expression::DyadicExpression {
+                verb: DyadicVerb::LogicalAnd | DyadicVerb::LogicalOr,
+                ..
+            } => true,
+            _ => self.none_comparison(expression).is_some(),
+        }
+    }
+
+    /// Runs `expression` as a condition, from the current state: the states
+    /// when it's true and when it's false.
+    fn condition(&mut self, expression: &AstNode<Expression>) -> (State, State) {
+        let expression = unparenthesize(expression);
+        match &expression.data {
+            Expression::MonadicPreExpression {
+                verb: MonadicVerb::Not,
+                operand,
+            } => {
+                let (yes, no) = self.condition(operand);
+                (no, yes)
+            }
+            Expression::DyadicExpression {
+                lhs,
+                verb: DyadicVerb::LogicalAnd,
+                rhs,
+            } => {
+                let (yes, no) = self.condition(lhs);
+                self.state = yes;
+                let (both, not_rhs) = self.condition(rhs);
+                (both, no.joined(&not_rhs))
+            }
+            Expression::DyadicExpression {
+                lhs,
+                verb: DyadicVerb::LogicalOr,
+                rhs,
+            } => {
+                let (yes, no) = self.condition(lhs);
+                self.state = no;
+                let (rhs_yes, neither) = self.condition(rhs);
+                (yes.joined(&rhs_yes), neither)
+            }
+            _ => match self.none_comparison(expression) {
+                Some((symbol, equal, lhs, rhs)) => {
+                    self.expression(lhs);
+                    self.expression(rhs);
+                    let mut is_none = self.state.clone();
+                    let mut is_not = self.state.clone();
+                    if self.is_local_or_argument(symbol) && is_none.reachable {
+                        is_none.none.insert(symbol);
+                    }
+                    is_not.none.remove(&symbol);
+                    if equal {
+                        (is_none, is_not)
+                    } else {
+                        (is_not, is_none)
+                    }
+                }
+                None => {
+                    self.evaluate(expression);
+                    (self.state.clone(), self.state.clone())
+                }
+            },
+        }
+    }
+
     fn expression(&mut self, expression: &AstNode<Expression>) {
+        if self.is_logical(expression) {
+            let (yes, no) = self.condition(expression);
+            self.state = yes.joined(&no);
+        } else {
+            self.evaluate(expression);
+        }
+    }
+
+    fn evaluate(&mut self, expression: &AstNode<Expression>) {
         match &expression.data {
             Expression::Identifier(_) => {
-                if let Some(local) = self.local(expression) {
-                    self.read(local, expression.span, None);
+                if let Some(symbol) = self.variable(expression) {
+                    self.read(symbol, expression.span, None);
                 }
             }
             Expression::Literal(_) => {}
@@ -411,15 +616,35 @@ impl Flow<'_> {
                 }
                 self.expression(type_);
             }
-            Expression::MonadicPreExpression { operand, .. }
-            | Expression::MonadicPostExpression { operand, .. } => self.expression(operand),
-            Expression::DyadicExpression { lhs, verb, rhs } => {
-                match self.local(lhs).filter(|_| verb.is_assignment()) {
-                    // The value is worked out before it's assigned.
-                    Some(local) => {
-                        self.expression(rhs);
-                        self.assign(local);
+            Expression::MonadicPreExpression { operand, verb }
+            | Expression::MonadicPostExpression { operand, verb } => {
+                self.expression(operand);
+                if matches!(verb, MonadicVerb::Increment | MonadicVerb::Decrement) {
+                    if let Some(symbol) = self.variable(operand) {
+                        self.assign(symbol);
                     }
+                }
+            }
+            Expression::DyadicExpression { lhs, verb, rhs } => {
+                if !verb.is_assignment() {
+                    self.expression(lhs);
+                    self.expression(rhs);
+                    return;
+                }
+                match self.variable(lhs) {
+                    // The value is worked out before it's assigned.
+                    Some(symbol) => {
+                        self.expression(rhs);
+                        self.assign(symbol);
+                        if *verb == DyadicVerb::Assign
+                            && self.state.reachable
+                            && is_none_literal(rhs)
+                            && self.is_local_or_argument(symbol)
+                        {
+                            self.state.none.insert(symbol);
+                        }
+                    }
+                    // `X.Y = ...` uses `X`.
                     None => {
                         self.expression(lhs);
                         self.expression(rhs);
@@ -427,7 +652,7 @@ impl Flow<'_> {
                 }
             }
             Expression::Call { operand, arguments } => {
-                // The callee is a name, or an object's member (which reads the
+                // The callee is a name, or an object's member (which uses the
                 // object).
                 let callee = unparenthesize(operand);
                 let named = match &callee.data {
@@ -438,7 +663,7 @@ impl Flow<'_> {
                         target,
                     } => Operand::Name(target.data.clone()),
                     Expression::MemberAccess { operand, .. } => {
-                        self.expression(operand);
+                        self.dereference(operand);
                         Operand::of(&callee.data)
                     }
                     _ => {
@@ -458,10 +683,10 @@ impl Flow<'_> {
             Expression::DefaultAccess { operand, .. }
             | Expression::StaticAccess { operand, .. } => {
                 if let Some(operand) = operand {
-                    self.expression(operand);
+                    self.dereference(operand);
                 }
             }
-            Expression::MemberAccess { operand, .. } => self.expression(operand),
+            Expression::MemberAccess { operand, .. } => self.dereference(operand),
             Expression::Cast { operand, .. } => self.expression(operand),
             Expression::ParentheticalExpression(inner) => self.expression(inner),
         }
@@ -473,18 +698,19 @@ impl Flow<'_> {
         let mut given = Vec::new();
         for (i, argument) in arguments.expressions.iter().enumerate() {
             let Some(argument) = argument else { continue };
-            match self.local(argument) {
-                Some(local) => {
+            match self.variable(argument) {
+                Some(symbol) => {
                     let span = unparenthesize(argument).span;
                     let id = self.call_id(span.start, callee, i);
-                    self.read(local, span, Some(id));
-                    given.push((local, id));
+                    self.read(symbol, span, Some(id));
+                    given.push((symbol, id));
                 }
                 None => self.expression(argument),
             }
         }
-        for (local, id) in given {
-            self.state.pending.entry(local).or_default().insert(id);
+        for (symbol, id) in given {
+            self.state.pending.entry(symbol).or_default().insert(id);
+            self.state.forget(symbol);
         }
     }
 }

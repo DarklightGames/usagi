@@ -39,7 +39,9 @@ Done (steps 0 to 4, the graph of 6 and the first typing of 7, of [Order of work]
   the reads of an object local that no assignment reaches
   (`SymbolTable::unassigned_reads`), each with the calls the local was given
   to before. The project lint looks those calls' functions up and reports a
-  read only if none of them has an `out` argument there.
+  read only if none of them has an `out` argument there. The pass also finds,
+  by itself and per file, C021 `known-none-access`
+  (`SymbolTable::flow_problems`, reported by the visitor).
 - Minimal typing, and the lint that needed it: S018 `non-exhaustive-switch`,
   opt-in (steps 4d and 7, in part). The symbol table records each `switch`
   (its subject and `case` labels as `Operand`s, names that can be looked up

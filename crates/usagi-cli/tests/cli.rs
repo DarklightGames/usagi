@@ -515,6 +515,42 @@ fn lint_reports_unassigned_object_locals() {
 }
 
 #[test]
+fn lint_runs_the_flow_lints() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", "class Object;\n"),
+        ("Engine/Classes/Actor.uc", "class Actor extends Object;\n"),
+        (
+            "Mod/Classes/Bar.uc",
+            "class Bar extends Actor;\n\
+             function Lost(out int R) { Log(1); }\n\
+             function F(Actor P)\n\
+             {\n\
+             \x20   local bool bFound;\n\
+             \x20   local Actor A;\n\
+             \x20   if (P == None) P.Destroy();\n\
+             \x20   if (bFound) {}\n\
+             \x20   A = Spawn(class'Actor');\n\
+             \x20   A.Destroy();\n\
+             \x20   while (P != None) return;\n\
+             }\n",
+        ),
+    ]);
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    // C021 runs by default.
+    assert_eq!(
+        run(&["--select", "ALL"]),
+        "Mod/Classes/Bar.uc:7:20: C021 `P` is `None` here, so using it is an Accessed None\n"
+    );
+}
+
+#[test]
 fn undeclared_default_properties_by_configuration() {
     let dir = project(&[
         (

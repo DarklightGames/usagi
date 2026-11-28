@@ -182,6 +182,8 @@ lints! {
         "A variable of a class that isn't an `Actor` holds a reference to an `Actor`. Opt-in."),
     UnassignedObjectLocal = ("C019", "unassigned-object-local", Correctness, Error, Never,
         "An object local read where nothing can have assigned it, so it's always `None`. Opt-in."),
+    KnownNoneAccess = ("C021", "known-none-access", Correctness, Error, Never,
+        "A local or argument used where it's known to be `None`: an Accessed None."),
 
     // Suspicious
     EmptyBody = ("S001", "empty-body", Suspicious, Warning, Never,

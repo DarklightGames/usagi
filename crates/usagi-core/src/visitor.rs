@@ -92,8 +92,10 @@ impl<'a> Visitor<'a> {
 
     /// Checks the file's comments: reports each end-of-line comment that's
     /// continued on the lines below it, as one problem spanning the comment
-    /// and its continuations.
+    /// and its continuations. Also reports what the flow pass found while
+    /// the symbol table was built.
     pub fn check_comments(&mut self) {
+        self.flow_problems();
         let continues = crate::source::comment_continuations(self.contents, self.comments);
         let mut i = 0;
         while i < self.comments.len() {
@@ -114,6 +116,14 @@ impl<'a> Visitor<'a> {
                 );
             }
             i = last + 1;
+        }
+    }
+
+    /// Reports the problems the flow pass found (see [`crate::flow`]).
+    fn flow_problems(&mut self) {
+        let symbols = self.symbols;
+        for problem in symbols.flow_problems() {
+            self.report(problem.lint, problem.message.clone(), problem.span);
         }
     }
 
