@@ -1035,3 +1035,58 @@ fn functions_with_goto_are_not_looked_at() {
         found(&[(1, "H")])
     );
 }
+
+/// The `(line, text)` of each problem of `lint` in the last source's class.
+fn problems_of(lint: Lint, sources: &[&str]) -> Vec<(usize, String)> {
+    let p = project(sources);
+    let last = sources.last().unwrap();
+    let class = p.classes().last().unwrap();
+    project_lint::lint(&p, class, last)
+        .into_iter()
+        .filter(|e| e.lint == Some(lint))
+        .map(|e| {
+            assert_eq!(e.severity, lint.severity());
+            (
+                e.span.line.unwrap(),
+                last[e.span.start..e.span.end].to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_bool_local_tested_where_nothing_assigns_it() {
+    let source = "class T extends Helpers;\n\
+        function GetFlag(out bool B) {}\n\
+        function F()\n\
+        {\n\
+        \x20   local bool bFound, bSet, bOut, bUsed;\n\
+        \x20   local int I;\n\
+        \x20   if (bFound) {}\n\
+        \x20   if (!bFound && I > 0 || bFound) {}\n\
+        \x20   while (bFound) {}\n\
+        \x20   bSet = true;\n\
+        \x20   if (bSet) {}\n\
+        \x20   GetFlag(bOut);\n\
+        \x20   if (bOut) {}\n\
+        \x20   I = int(bUsed);\n\
+        \x20   for (I = 0; I < 3; I++) { if (bUsed) {} bUsed = true; }\n\
+        }\n";
+    assert_eq!(
+        problems_of(Lint::UnassignedBoolCondition, &[OBJECT, HELPERS, source]),
+        found(&[(7, "bFound"), (8, "bFound"), (8, "bFound"), (9, "bFound")])
+    );
+    let p = project(&[OBJECT, HELPERS, source]);
+    let errors = project_lint::check(&p, p.class("T").unwrap());
+    let message = &errors
+        .iter()
+        .find(|e| e.lint == Some(Lint::UnassignedBoolCondition))
+        .unwrap()
+        .message;
+    assert_eq!(
+        message,
+        "`bFound` is always `False` here: nothing can have assigned it"
+    );
+    // An object local isn't a `bool`, nor the other way round.
+    assert!(problems_of(Lint::UnassignedObjectLocal, &[OBJECT, HELPERS, source]).is_empty());
+}

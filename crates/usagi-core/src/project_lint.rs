@@ -7,7 +7,9 @@
 //! class's parents, so a class whose parent isn't in the project is never
 //! reported for what it might inherit.
 
-use crate::ast::{FunctionArgumentModifier, FunctionModifierType, FunctionTypeType, Identifier};
+use crate::ast::{
+    FunctionArgumentModifier, FunctionModifierType, FunctionTypeType, Identifier, PodType,
+};
 use crate::lint::Lint;
 use crate::parser::ProgramError;
 use crate::project::Declaration;
@@ -365,7 +367,7 @@ fn actor_references_in_objects(project: &Project, class: ClassId, errors: &mut V
 /// `class<...>`, or a name that is a class and not a struct or enum. `None`
 /// if the project can't tell.
 fn is_object_type(project: &Project, class: ClassId, type_: &TypeRef) -> Option<bool> {
-    // The flow pass tracks only locals of a named type or `class<...>`.
+    // Only C019's object locals get here: a named type or `class<...>`.
     let TypeRef::Named(name) = type_ else {
         return Some(true);
     };
@@ -441,13 +443,20 @@ fn cannot_assign(
     out != Some(true)
 }
 
+/// C019 for object locals and C020 for `bool` locals tested in conditions.
 fn unassigned_object_locals(project: &Project, class: ClassId, errors: &mut Vec<ProgramError>) {
-    let lint = Lint::UnassignedObjectLocal;
     let table = project.table(class);
     for read in table.unassigned_reads() {
         let local = table.symbol(read.local);
         let type_ = local.kind.type_().expect("a local has a type");
-        if is_object_type(project, class, type_) != Some(true)
+        let (lint, value) = if *type_ == TypeRef::Pod(PodType::Bool) {
+            (Lint::UnassignedBoolCondition, "False")
+        } else {
+            (Lint::UnassignedObjectLocal, "None")
+        };
+        if (lint == Lint::UnassignedObjectLocal
+            && is_object_type(project, class, type_) != Some(true))
+            || (lint == Lint::UnassignedBoolCondition && !read.condition)
             || !read
                 .calls
                 .iter()
@@ -457,8 +466,9 @@ fn unassigned_object_locals(project: &Project, class: ClassId, errors: &mut Vec<
         }
         errors.push(ProgramError {
             message: format!(
-                "`{}` is always `None` here: nothing can have assigned it",
-                local.name.as_str()
+                "`{}` is always `{}` here: nothing can have assigned it",
+                local.name.as_str(),
+                value
             ),
             span: read.span,
             severity: lint.severity(),

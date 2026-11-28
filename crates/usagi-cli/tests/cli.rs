@@ -550,11 +550,12 @@ fn lint_runs_the_flow_lints() {
          Mod/Classes/Bar.uc:11:5: S021 this loop never goes round again: every path through its body leaves it\n"
     );
     assert_eq!(
-        run(&["--select", "S022"]),
-        "Mod/Classes/Bar.uc:10:5: S022 `A` may be `None` here: `Spawn` returns `None` when it fails, and nothing checks for that\n"
+        run(&["--select", "C020,S022"]),
+        "Mod/Classes/Bar.uc:8:9: C020 `bFound` is always `False` here: nothing can have assigned it\n\
+         Mod/Classes/Bar.uc:10:5: S022 `A` may be `None` here: `Spawn` returns `None` when it fails, and nothing checks for that\n"
     );
     assert_eq!(
-        run(&["--select", "S022", "--no-project"]),
+        run(&["--select", "C020,S022", "--no-project"]),
         "Mod/Classes/Bar.uc:10:5: S022 `A` may be `None` here: `Spawn` returns `None` when it fails, and nothing checks for that\n"
     );
 }

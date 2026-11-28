@@ -3,7 +3,7 @@
 //!
 //! - which locals may have been assigned, and the calls they were given to
 //!   that may have assigned them (an `out` argument), for C019
-//!   `unassigned-object-local`;
+//!   `unassigned-object-local` and C020 `unassigned-bool-condition`;
 //! - which locals and arguments are known to be `None`, from a comparison
 //!   with `None` or an assignment of it, for C021 `known-none-access`;
 //! - which variables may hold an unchecked result of `Spawn` or
@@ -11,7 +11,7 @@
 //! - and whether a loop can go round again, for S021 `loop-runs-once`.
 //!
 //! The pass knows the file and nothing else, so a call that a local is given
-//! to may assign it (an `out` argument) or not. For C019 it records
+//! to may assign it (an `out` argument) or not. For C019 and C020 it records
 //! such calls with the read, and the project lint looks their declarations
 //! up: the read is a problem only if none of them can assign the local. The
 //! other lints treat such a call as assigning what it's given.
@@ -41,6 +41,9 @@ pub struct UnassignedRead {
     /// the function called (a name or a member, `Obj.F`) and the argument's
     /// position, from 0. A read that is itself an argument includes its call.
     pub calls: Vec<(Operand, usize)>,
+    /// Whether the read is a condition, or part of one: `if (B)`, `!B`,
+    /// `B && C`. A `bool` local is only recorded there.
+    pub condition: bool,
 }
 
 /// A problem the pass finds by itself, without other classes.
@@ -290,13 +293,13 @@ impl Flow<'_> {
     }
 
     /// Whether the reads of `symbol` that no assignment reaches are recorded:
-    /// a local that may hold an object.
+    /// a local that may hold an object, or a `bool` local.
     fn is_tracked_local(&self, symbol: SymbolId) -> bool {
         !self.arrays.contains(&symbol)
             && matches!(
                 self.kind(symbol),
                 SymbolKind::Local {
-                    type_: TypeRef::Named(_) | TypeRef::Class(_),
+                    type_: TypeRef::Named(_) | TypeRef::Class(_) | TypeRef::Pod(PodType::Bool),
                     ..
                 }
             )
@@ -311,8 +314,18 @@ impl Flow<'_> {
         )
     }
 
-    fn read(&mut self, symbol: SymbolId, span: AstSpan, extra: Option<usize>) {
+    fn read(&mut self, symbol: SymbolId, span: AstSpan, extra: Option<usize>, condition: bool) {
         if !self.state.reachable || !self.is_tracked_local(symbol) {
+            return;
+        }
+        let is_bool = matches!(
+            self.kind(symbol),
+            SymbolKind::Local {
+                type_: TypeRef::Pod(_),
+                ..
+            }
+        );
+        if is_bool && !condition {
             return;
         }
         let finding = (!self.state.assigned.contains(&symbol)).then(|| {
@@ -325,6 +338,7 @@ impl Flow<'_> {
                     .chain(extra.as_ref())
                     .map(|&id| self.calls[id].clone())
                     .collect(),
+                condition,
             }
         });
         self.reads.insert(span.start, finding);
@@ -651,6 +665,12 @@ impl Flow<'_> {
                 let (rhs_yes, neither) = self.condition(rhs);
                 (yes.joined(&rhs_yes), neither)
             }
+            Expression::Identifier(_) => {
+                if let Some(symbol) = self.variable(expression) {
+                    self.read(symbol, expression.span, None, true);
+                }
+                (self.state.clone(), self.state.clone())
+            }
             _ => match self.none_comparison(expression) {
                 Some((symbol, equal, lhs, rhs)) => {
                     self.expression(lhs);
@@ -690,7 +710,7 @@ impl Flow<'_> {
         match &expression.data {
             Expression::Identifier(_) => {
                 if let Some(symbol) = self.variable(expression) {
-                    self.read(symbol, expression.span, None);
+                    self.read(symbol, expression.span, None, false);
                 }
             }
             Expression::Literal(_) => {}
@@ -789,7 +809,7 @@ impl Flow<'_> {
                 Some(symbol) => {
                     let span = unparenthesize(argument).span;
                     let id = self.call_id(span.start, callee, i);
-                    self.read(symbol, span, Some(id));
+                    self.read(symbol, span, Some(id), false);
                     given.push((symbol, id));
                 }
                 None => self.expression(argument),
