@@ -10,6 +10,7 @@
 //! All spans are byte offsets into the file.
 
 use crate::ast::*;
+use crate::flow::{FlowProblem, UnassignedRead};
 use std::collections::HashMap;
 
 /// Identifies a [`Symbol`] in its [`SymbolTable`].
@@ -244,7 +245,8 @@ pub enum ReferenceKind {
     Write,
     /// It's called.
     Call,
-    /// It's assigned a default value in `defaultproperties`.
+    /// It's assigned a default value in `defaultproperties`, or (a function)
+    /// is that value, assigned to a delegate.
     DefaultProperty,
     /// It's listed in the replication block.
     Replication,
@@ -288,7 +290,7 @@ pub enum Operand {
 }
 
 impl Operand {
-    fn of(expression: &Expression) -> Operand {
+    pub(crate) fn of(expression: &Expression) -> Operand {
         match expression {
             Expression::Identifier(name) if name.eq_ignore_ascii_case("self") => Operand::This,
             Expression::Identifier(name) => Operand::Name(name.data.clone()),
@@ -357,6 +359,11 @@ pub struct SymbolTable {
     /// the file declares.
     instance_uses: HashMap<ScopeId, AstSpan>,
     switches: Vec<SwitchRecord>,
+    unassigned_reads: Vec<UnassignedRead>,
+    flow_problems: Vec<FlowProblem>,
+    default_value_names: Vec<Identifier>,
+    /// The functions whose body does nothing, or only returns a literal.
+    stubs: std::collections::HashSet<SymbolId>,
 }
 
 /// A name that a file uses but doesn't declare.
@@ -397,6 +404,10 @@ impl SymbolTable {
             unresolved_uses: Vec::new(),
             instance_uses: HashMap::new(),
             switches: Vec::new(),
+            unassigned_reads: Vec::new(),
+            flow_problems: Vec::new(),
+            default_value_names: Vec::new(),
+            stubs: std::collections::HashSet::new(),
         };
         table.add_scope(ScopeKind::Class, None);
         table.declare_program(program);
@@ -508,6 +519,31 @@ impl SymbolTable {
         &self.switches
     }
 
+    /// The reads of a local that may hold an object (of a named type or
+    /// `class<...>`, and not an array) that no assignment reaches, unless one
+    /// of the calls each lists assigns it (an `out` argument). In order.
+    pub fn unassigned_reads(&self) -> &[UnassignedRead] {
+        &self.unassigned_reads
+    }
+
+    /// Whether `function` has the body of a hook for others to override: it
+    /// does nothing, or only returns a literal (`{ return false; }`).
+    pub fn function_is_stub(&self, function: SymbolId) -> bool {
+        self.stubs.contains(&function)
+    }
+
+    /// The bare names given as values in `defaultproperties`, at any depth:
+    /// functions assigned to delegates, among others (`ROLE_None`).
+    pub fn default_value_names(&self) -> &[Identifier] {
+        &self.default_value_names
+    }
+
+    /// The problems the flow pass found in the file's functions by itself,
+    /// which the visitor reports (see [`crate::flow`]).
+    pub fn flow_problems(&self) -> &[FlowProblem] {
+        &self.flow_problems
+    }
+
     /// Every resolved reference, sorted by position.
     pub fn references(&self) -> &[Reference] {
         &self.references
@@ -546,6 +582,12 @@ impl SymbolTable {
         }
         for switch in &mut self.switches {
             switch.span.line = Some(line_of(switch.span.start));
+        }
+        for read in &mut self.unassigned_reads {
+            read.span.line = Some(line_of(read.span.start));
+        }
+        for problem in &mut self.flow_problems {
+            problem.span.line = Some(line_of(problem.span.start));
         }
         if let Some(class) = &mut self.class {
             class.span.line = Some(line_of(class.span.start));
@@ -690,6 +732,9 @@ impl SymbolTable {
         let Some(body) = &f.body else {
             return;
         };
+        if is_stub(body) {
+            self.stubs.insert(id);
+        }
         for statement in &body.statements {
             match statement {
                 FunctionBodyStatement::ConstDeclaration(c) => self.declare_const(function_scope, c),
@@ -851,6 +896,23 @@ fn struct_member_access(modifiers: &[StructVarModifier]) -> Access {
         StructVarModifier::Protected => Some(Access::Protected),
         _ => None,
     }))
+}
+
+/// Whether a function body does nothing, or only returns a literal.
+fn is_stub(body: &FunctionBody) -> bool {
+    let mut code = body.statements.iter().filter_map(|s| match s {
+        FunctionBodyStatement::CodeStatement(c) if !matches!(c.data, CodeStatement::Empty) => {
+            Some(&c.data)
+        }
+        _ => None,
+    });
+    match (code.next(), code.next()) {
+        (None, _) => true,
+        (Some(CodeStatement::Return(value)), None) => value
+            .as_ref()
+            .is_none_or(|v| matches!(unparenthesize(v).data, Expression::Literal(_))),
+        _ => false,
+    }
 }
 
 fn unparenthesize(mut expression: &AstNode<Expression>) -> &AstNode<Expression> {
@@ -1028,6 +1090,9 @@ impl Resolver<'_> {
                     FunctionBodyStatement::CodeStatement(s) => r.statement(s),
                 }
             }
+            let findings = crate::flow::analyze(r.table, scope, body);
+            r.table.unassigned_reads.extend(findings.reads);
+            r.table.flow_problems.extend(findings.problems);
         });
     }
 
@@ -1068,8 +1133,46 @@ impl Resolver<'_> {
         });
     }
 
+    /// The functions named as values in `defaultproperties`, at any depth
+    /// (`OnClick=InternalOnClick`, in a `Begin Object` block too): assigned
+    /// to delegates. One the class declares is referred to; every name is
+    /// kept, as a subclass's may name an inherited function.
+    fn delegate_values(&mut self, statements: &[t3d::syntax::Statement]) {
+        use t3d::syntax::{StatementKind, ValueKind};
+        for statement in statements {
+            match &statement.kind {
+                StatementKind::Assignment(a) => {
+                    let Some(value) = &a.value else { continue };
+                    let ValueKind::Identifier(function) = &value.kind else {
+                        continue;
+                    };
+                    let span = AstSpan {
+                        start: value.span.start,
+                        end: value.span.end,
+                        line: None,
+                    };
+                    let name = AstNode {
+                        data: Identifier::new(function),
+                        span,
+                    };
+                    self.table.default_value_names.push(name.data.clone());
+                    self.refer(
+                        ScopeId::CLASS,
+                        &[Namespace::Function],
+                        &name,
+                        span,
+                        ReferenceKind::DefaultProperty,
+                    );
+                }
+                StatementKind::Object(object) => self.delegate_values(&object.statements),
+                StatementKind::Vector(_) | StatementKind::InlineStruct(_) => {}
+            }
+        }
+    }
+
     fn default_properties(&mut self, d: &AstNode<DefaultProperties>) {
         use t3d::syntax::StatementKind;
+        self.delegate_values(&d.statements);
         // Only top-level assignments set the class's own properties.
         for statement in &d.statements {
             if let StatementKind::Assignment(a) = &statement.kind {

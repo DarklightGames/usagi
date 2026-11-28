@@ -460,6 +460,108 @@ fn could_be_static_is_opt_in() {
 }
 
 #[test]
+fn lint_reports_actor_references_in_objects() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", "class Object;\n"),
+        (
+            "Engine/Classes/Actor.uc",
+            "class Actor extends Object;\nvar Actor Owner;\n",
+        ),
+        (
+            "Mod/Classes/BarObject.uc",
+            "class BarObject extends Object;\nvar Actor MyCoolFoo;\n",
+        ),
+    ]);
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert_eq!(run(&["--select", "ALL"]), "");
+    assert_eq!(
+        run(&["--select", "actor-reference-in-object"]),
+        "Mod/Classes/BarObject.uc:2:11: C018 `MyCoolFoo` in `BarObject`, which isn't an actor, \
+         holds a reference to an actor (`Actor`): the garbage collector can crash the game on it\n"
+    );
+    assert_eq!(run(&["--select", "C018", "--no-project"]), "");
+}
+
+#[test]
+fn lint_reports_unassigned_object_locals() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", "class Object;\n"),
+        (
+            "Mod/Classes/Bar.uc",
+            "class Bar extends Object;\nfunction Bar Get()\n{\n    local Bar B;\n    return B;\n}\n",
+        ),
+    ]);
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert_eq!(run(&["--select", "ALL"]), "");
+    assert_eq!(
+        run(&["--select", "unassigned-object-local"]),
+        "Mod/Classes/Bar.uc:5:12: C019 `B` is always `None` here: nothing can have assigned it\n"
+    );
+    assert_eq!(run(&["--select", "C019", "--no-project"]), "");
+}
+
+#[test]
+fn lint_runs_the_flow_lints() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", "class Object;\n"),
+        ("Engine/Classes/Actor.uc", "class Actor extends Object;\n"),
+        (
+            "Mod/Classes/Bar.uc",
+            "class Bar extends Actor;\n\
+             function Lost(out int R) { Log(1); }\n\
+             function F(Actor P)\n\
+             {\n\
+             \x20   local bool bFound;\n\
+             \x20   local Actor A;\n\
+             \x20   if (P == None) P.Destroy();\n\
+             \x20   if (bFound) {}\n\
+             \x20   A = Spawn(class'Actor');\n\
+             \x20   A.Destroy();\n\
+             \x20   while (P != None) return;\n\
+             }\n",
+        ),
+    ]);
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    // C021 and S021 run by default; S022 and the project lints only when named.
+    assert_eq!(
+        run(&["--select", "ALL"]),
+        "Mod/Classes/Bar.uc:7:20: C021 `P` is `None` here, so using it is an Accessed None\n\
+         Mod/Classes/Bar.uc:11:5: S021 this loop never goes round again: every path through its body leaves it\n"
+    );
+    assert_eq!(
+        run(&["--select", "C020,S020,S022"]),
+        "Mod/Classes/Bar.uc:2:23: S020 `R` is an `out` argument, but `Lost` never uses it\n\
+         Mod/Classes/Bar.uc:8:9: C020 `bFound` is always `False` here: nothing can have assigned it\n\
+         Mod/Classes/Bar.uc:10:5: S022 `A` may be `None` here: `Spawn` returns `None` when it fails, and nothing checks for that\n"
+    );
+    assert_eq!(
+        run(&["--select", "C020,S020,S022", "--no-project"]),
+        "Mod/Classes/Bar.uc:10:5: S022 `A` may be `None` here: `Spawn` returns `None` when it fails, and nothing checks for that\n"
+    );
+}
+
+#[test]
 fn undeclared_default_properties_by_configuration() {
     let dir = project(&[
         (

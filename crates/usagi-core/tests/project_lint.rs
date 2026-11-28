@@ -527,3 +527,611 @@ fn could_be_static_needs_the_whole_chain() {
     let quiet = "class Q extends Object;\n// usagi: ignore[S019]\nfunction F() {}\n";
     assert!(statics(&[OBJECT, quiet]).is_empty());
 }
+
+/// The `(name, message)` of each C018 problem in the class named `class`.
+fn actor_references(p: &Project, class: &str) -> Vec<(String, String)> {
+    let class = p.class(class).unwrap();
+    let table = p.table(class);
+    project_lint::check(p, class)
+        .into_iter()
+        .filter(|e| e.lint == Some(Lint::ActorReferenceInObject))
+        .map(|e| {
+            assert_eq!(e.severity, Lint::ActorReferenceInObject.severity());
+            let name = table
+                .iter()
+                .find(|(_, s)| s.span.start == e.span.start)
+                .map(|(_, s)| s.name.as_str().to_string())
+                .expect("the span is a variable's");
+            (name, e.message)
+        })
+        .collect()
+}
+
+fn names(found: Vec<(String, String)>) -> Vec<String> {
+    found.into_iter().map(|(name, _)| name).collect()
+}
+
+const FOO_ACTOR: &str = "class FooActor extends Actor;\n";
+
+#[test]
+fn an_object_that_holds_an_actor() {
+    let bar = "class BarObject extends Object;\n\
+        var FooActor MyCoolFoo;\n\
+        var Actor Plain, Second;\n\
+        var array<FooActor> Many;\n\
+        var FooActor Fixed[2];\n\
+        var array< array<Actor> > Nested;\n\
+        var class<FooActor> FooClass;\n\
+        var Object Other;\n\
+        var int Count;\n\
+        var EColor Color;\n\
+        var Unknown Mystery;\n\
+        function F() { local FooActor L; }\n";
+    let p = project(&[OBJECT, ACTOR, FOO_ACTOR, bar]);
+    let found = actor_references(&p, "BarObject");
+    assert_eq!(
+        found[0].1,
+        "`MyCoolFoo` in `BarObject`, which isn't an actor, holds a reference to an actor \
+         (`FooActor`): the garbage collector can crash the game on it"
+    );
+    assert_eq!(
+        names(found),
+        ["MyCoolFoo", "Plain", "Second", "Many", "Fixed", "Nested"]
+    );
+}
+
+#[test]
+fn an_actor_may_hold_an_actor() {
+    let p = project(&[
+        OBJECT,
+        ACTOR,
+        FOO_ACTOR,
+        "class Baz extends FooActor;\nvar Actor A;\n",
+    ]);
+    assert!(actor_references(&p, "Baz").is_empty());
+    // A class whose parents aren't all known may be an actor.
+    let p = project(&[
+        OBJECT,
+        ACTOR,
+        "class Orphan extends Missing;\nvar Actor A;\n",
+    ]);
+    assert!(actor_references(&p, "Orphan").is_empty());
+    // Without `Actor` in the project, nothing is an actor.
+    let p = project(&[OBJECT, "class Lone extends Object;\nvar Lone L;\n"]);
+    assert!(actor_references(&p, "Lone").is_empty());
+}
+
+#[test]
+fn an_actor_in_a_struct() {
+    let bar = "class BarObject extends Object;\n\
+        struct Inner { var int N; var FooActor Foo; };\n\
+        struct Outer { var float F; var array<Inner> Inners; };\n\
+        struct Safe { var int N; var enum ELocal { L_A } E; };\n\
+        struct Loop1 { var Loop2 L; };\n\
+        struct Loop2 { var Loop1 L; var Safe S; };\n\
+        var Inner I;\n\
+        var Outer O;\n\
+        var Safe S;\n\
+        var Loop1 L;\n";
+    let p = project(&[OBJECT, ACTOR, FOO_ACTOR, bar]);
+    let found = actor_references(&p, "BarObject");
+    assert_eq!(names(found.clone()), ["I", "O"]);
+    assert!(found[1].1.contains("(`FooActor`) (through `Inners.Foo`)"));
+    // A struct declared in a parent class.
+    let p = project(&[
+        OBJECT,
+        ACTOR,
+        FOO_ACTOR,
+        bar,
+        "class Sub extends BarObject;\nvar Inner I;\n",
+    ]);
+    assert_eq!(names(actor_references(&p, "Sub")), ["I"]);
+}
+
+#[test]
+fn the_engines_actor_is_preferred() {
+    let file = |package: &str, path: &str, source: &str| {
+        let origin = Origin {
+            root: 0,
+            package: Some(package.to_string()),
+            path: PathBuf::from(path),
+        };
+        (origin, parse_program(source).unwrap().symbols)
+    };
+    let p = Project::build(vec![
+        file("Core", "a.uc", OBJECT),
+        // A class named `Actor` in another package, found first.
+        file("Aaa", "b.uc", "class Actor extends Object;\n"),
+        file("Engine", "c.uc", ACTOR),
+        file(
+            "Mod",
+            "d.uc",
+            "class Bar extends Object;\nvar Engine.Actor A;\nvar Aaa.Actor B;\n",
+        ),
+    ]);
+    assert_eq!(names(actor_references(&p, "Bar")), ["A"]);
+}
+
+#[test]
+fn an_actor_reference_can_be_suppressed() {
+    let bar = "class BarObject extends Object;\n\
+        var Actor A; // usagi: ignore[C018]\n\
+        var Actor B;\n";
+    let p = project(&[OBJECT, ACTOR, bar]);
+    let class = p.class("BarObject").unwrap();
+    let lines: Vec<usize> = project_lint::lint(&p, class, bar)
+        .iter()
+        .map(|e| e.span.line.unwrap())
+        .collect();
+    assert_eq!(lines, [3]);
+}
+
+const HELPERS: &str = "class Helpers extends Object;\n\
+    struct SPoint { var int X; };\n\
+    var Helpers Next;\n\
+    var int Ints[2];\n\
+    var Helpers Many[2];\n\
+    function Fill(out Helpers H, Helpers In) {}\n\
+    function Take(Helpers H) { local int L; }\n\
+    static function Helpers Make() { return None; }\n\
+    function Helpers Self2() { return self; }\n\
+    delegate OnDone(Helpers H);\n";
+
+/// The `(line, text)` of each C019 read in the last source's class.
+fn unassigned(sources: &[&str]) -> Vec<(usize, String)> {
+    let p = project(sources);
+    let last = sources.last().unwrap();
+    let class = p.classes().last().unwrap();
+    project_lint::lint(&p, class, last)
+        .into_iter()
+        .filter(|e| e.lint == Some(Lint::UnassignedObjectLocal))
+        .map(|e| {
+            assert_eq!(e.severity, Lint::UnassignedObjectLocal.severity());
+            (
+                e.span.line.unwrap(),
+                last[e.span.start..e.span.end].to_string(),
+            )
+        })
+        .collect()
+}
+
+/// [`unassigned`] for a class extending `Helpers` whose only function has
+/// `body`, with `locals` declared first; lines count from the body's first.
+fn unassigned_in(locals: &str, body: &str) -> Vec<(usize, String)> {
+    let source = format!(
+        "class T extends Helpers;\nfunction F()\n{{\n{}\n{}\n}}\n",
+        locals, body
+    );
+    unassigned(&[OBJECT, HELPERS, &source])
+        .into_iter()
+        .map(|(line, text)| (line - 3 - locals.lines().count(), text))
+        .collect()
+}
+
+fn found(reads: &[(usize, &str)]) -> Vec<(usize, String)> {
+    reads.iter().map(|&(l, t)| (l, t.to_string())).collect()
+}
+
+#[test]
+fn a_local_that_nothing_assigns() {
+    let p = project(&[
+        OBJECT,
+        HELPERS,
+        "class T extends Helpers;\nfunction F()\n{\n    local Helpers H;\n    H.Take(None);\n}\n",
+    ]);
+    let class = p.class("T").unwrap();
+    let errors: Vec<_> = project_lint::check(&p, class)
+        .into_iter()
+        .filter(|e| e.lint == Some(Lint::UnassignedObjectLocal))
+        .collect();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0].message,
+        "`H` is always `None` here: nothing can have assigned it"
+    );
+    assert_eq!(
+        unassigned_in(
+            "local Helpers H, G;\nlocal class<Helpers> C;\nlocal int I;\nlocal SPoint S;\nlocal Helpers Arr[2];\nlocal array<Helpers> Dyn;",
+            "if (H == None) {}\nI = I + 1;\nTake(H);\nTake(C.default.Next);\nS.X = I;\nTake(Arr[0]);\nTake(Dyn[0]);\nG = H;\nTake(G);",
+        ),
+        found(&[(1, "H"), (3, "H"), (4, "C"), (8, "H")])
+    );
+}
+
+#[test]
+fn assignments_that_reach_a_read() {
+    assert!(unassigned_in("local Helpers H;", "H = Make();\nTake(H);\nH.Take(H);").is_empty());
+    // The value is worked out before it's assigned, and anything else on
+    // the left is a read.
+    assert_eq!(
+        unassigned_in(
+            "local Helpers H, G;",
+            "H = H.Self2();\nG.Next = H;\n(H) = None;\n"
+        ),
+        found(&[(1, "H"), (2, "G")])
+    );
+    // Code after `return` is never run.
+    assert!(unassigned_in("local Helpers H;", "return;\nTake(H);").is_empty());
+}
+
+#[test]
+fn out_arguments() {
+    // `Fill` assigns its first argument, not its second; `Take` assigns none.
+    assert_eq!(
+        unassigned_in(
+            "local Helpers A, B, C, D;",
+            "Fill(A, B);\nTake(A);\nTake(B);\nTake(C);\nTake(C);\nFill(D, D);"
+        ),
+        found(&[(1, "B"), (3, "B"), (4, "C"), (5, "C"), (6, "D")])
+    );
+    // A call on an object, and arguments past the last one.
+    assert_eq!(
+        unassigned_in(
+            "local Helpers A, B, O;",
+            "O = Make();\nO.Fill(A, None);\nTake(A);\nO.Take(B);\nTake(None, B);\nTake(, B);"
+        ),
+        found(&[(4, "B"), (5, "B"), (6, "B")])
+    );
+    // `static.F` is the class's own; `class'X'.static.F` isn't looked up.
+    assert_eq!(
+        unassigned_in(
+            "local Helpers A, B;",
+            "static.Take(A);\nclass'Helpers'.static.Fill(B);\nTake(B);"
+        ),
+        found(&[(1, "A")])
+    );
+    // A call whose function can't be found may assign anything it's given:
+    // on a static array, a struct or a name nobody declares.
+    assert!(
+        unassigned_in(
+            "local Helpers A, B, C;\nlocal SPoint S;",
+            "Many.Fill(A);\nTake(A);\nS.Fill(B);\nTake(B);\nNobody.Fill(C);\nTake(C);"
+        )
+        .is_empty()
+    );
+    // A call whose function can't be found may assign anything it's given.
+    assert!(
+        unassigned_in(
+            "local Helpers A, B, C, D, E, F2;\nlocal int N;",
+            "Many[0](D);\nTake(D);\nself(E);\nTake(E);\nMystery(A);\nTake(A);\nN.Fill(B);\nTake(B);\nInts[0].Fill(C);\nTake(C);\nSuper.Take(D);\nTake(D);\nNext.Mystery(E);\nTake(E);\nMake()(F2);\nTake(F2);"
+        )
+        .is_empty()
+    );
+    // A cast is not a call, to a class, a struct or an enum; but a function
+    // of that name is called.
+    assert_eq!(
+        unassigned_in(
+            "local Helpers A;\nlocal Object O;\nlocal int N;",
+            "O = Helpers(A);\nN = SPoint(A);\nN = EColor(A);\nTake(A);"
+        ),
+        found(&[(1, "A"), (2, "A"), (3, "A"), (4, "A")])
+    );
+    assert!(
+        unassigned(&[
+            OBJECT,
+            HELPERS,
+            "class T extends Helpers;\nfunction Helpers(out Object O) {}\nfunction F() { local Object A; Helpers(A); Take(A); }\n",
+        ])
+        .is_empty()
+    );
+    // `global.F` and delegates.
+    assert_eq!(
+        unassigned_in("local Helpers A, B;", "global.Take(A);\nOnDone(B);"),
+        found(&[(1, "A"), (2, "B")])
+    );
+}
+
+#[test]
+fn functions_declared_in_the_class_and_its_states() {
+    let source = "class T extends Helpers;\n\
+        function Mine(out Helpers H) {}\n\
+        function Theirs(Helpers H) {}\n\
+        function F()\n\
+        {\n\
+        \x20   local Helpers A, B;\n\
+        \x20   Mine(A);\n\
+        \x20   Theirs(A);\n\
+        \x20   Theirs(B);\n\
+        }\n\
+        state S\n\
+        {\n\
+        \x20   function InState(out Helpers H) {}\n\
+        \x20   function G() { local Helpers C; InState(C); Take(C); }\n\
+        }\n";
+    assert_eq!(unassigned(&[OBJECT, HELPERS, source]), found(&[(9, "B")]));
+}
+
+#[test]
+fn branches_join() {
+    let locals = "local Helpers H;\nlocal bool B;";
+    assert!(unassigned_in(locals, "if (B) H = Make();\nTake(H);").is_empty());
+    assert!(
+        unassigned_in(
+            locals,
+            "if (B) {} else if (B) {} else H = Make();\nTake(H);"
+        )
+        .is_empty()
+    );
+    assert!(unassigned_in(locals, "if (B) {} else if (B) H = Make();\nTake(H);").is_empty());
+    assert!(unassigned_in(locals, "if (B) return; else H = Make();\nTake(H);").is_empty());
+    assert_eq!(
+        unassigned_in(
+            locals,
+            "if (B);\nif (B) Take(H); else Take(H);\nif (B) {}\nTake(H);"
+        ),
+        found(&[(2, "H"), (2, "H"), (4, "H")])
+    );
+    assert_eq!(
+        unassigned_in(
+            locals,
+            "if (B) Take(H);\nelse if (B) Take(H);\nelse return;\nTake(H);"
+        ),
+        found(&[(1, "H"), (2, "H"), (4, "H")])
+    );
+}
+
+#[test]
+fn loops_carry_assignments_round() {
+    let locals = "local Helpers Best, H, Prev;\nlocal int I;";
+    // The best-candidate idiom: the assignment reaches the read by the loop.
+    assert!(
+        unassigned_in(
+            locals,
+            "for (I = 0; I < 3; I++) { if (Best == None) Best = Make(); }"
+        )
+        .is_empty()
+    );
+    assert!(unassigned_in(locals, "while (I < 3) { Take(Prev); Prev = Make(); I++; }").is_empty());
+    assert!(unassigned_in(locals, "do { Take(Prev); Prev = Make(); } until (I > 3);").is_empty());
+    assert!(unassigned_in(locals, "for (;;) { Take(Prev); Prev = Make(); }").is_empty());
+    // A loop that never assigns.
+    assert_eq!(
+        unassigned_in(
+            locals,
+            "for (I = 0; I < 3; I++) Take(H);\nwhile (H != None) {}\ndo Take(H); until (I > 3);"
+        ),
+        found(&[(1, "H"), (2, "H"), (3, "H")])
+    );
+    // `break` leaves the loop with its state; `continue` goes round.
+    assert!(unassigned_in(locals, "while (I < 3) { H = Make(); break; }\nTake(H);").is_empty());
+    assert!(
+        unassigned_in(
+            locals,
+            "for (I = 0; I < 3; I++) { Take(Prev); if (I > 0) { Prev = Make(); continue; } }"
+        )
+        .is_empty()
+    );
+    assert!(
+        unassigned_in(
+            locals,
+            "do { Take(Prev); if (I > 0) { Prev = Make(); continue; } } until (I > 3);"
+        )
+        .is_empty()
+    );
+    assert!(
+        unassigned_in(
+            locals,
+            "while (I < 3) { Take(Prev); if (I > 0) { Prev = Make(); continue; } }"
+        )
+        .is_empty()
+    );
+    // Outside a loop, `break` and `continue` lead nowhere.
+    assert!(unassigned_in(locals, "break;\nTake(H);\ncontinue;\nTake(H);").is_empty());
+}
+
+#[test]
+fn foreach_assigns_its_variables() {
+    let locals = "local Helpers H, G;\nlocal Actor A;\nlocal vector V;";
+    assert!(
+        unassigned_in(
+            locals,
+            "foreach AllObjects(class'Helpers', H) Take(H);\nTake(H);"
+        )
+        .is_empty()
+    );
+    assert!(
+        unassigned_in(
+            locals,
+            "foreach (Next.AllObjects(class'Helpers', H, V)) { if (G == None) G = H; }\nTake(G);"
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        unassigned_in(locals, "foreach AllObjects(class'Helpers', H) Take(G);"),
+        found(&[(1, "G")])
+    );
+}
+
+#[test]
+fn switches_fall_through() {
+    let locals = "local Helpers H;\nlocal int I;";
+    // Without a default, the switch may run no case.
+    assert_eq!(
+        unassigned_in(
+            locals,
+            "switch (I) { case 0: H = Make(); break; }\nTake(H);"
+        ),
+        Vec::<(usize, String)>::new()
+    );
+    assert_eq!(
+        unassigned_in(
+            locals,
+            "switch (I) { case 0: Take(H); case 1: H = Make(); default: Take(H); }"
+        ),
+        found(&[(1, "H")])
+    );
+    assert_eq!(
+        unassigned_in(
+            locals,
+            "switch (I) { case 0: return; default: break; }\nTake(H);"
+        ),
+        found(&[(2, "H")])
+    );
+    // `continue` in a switch goes round the loop around it.
+    assert!(
+        unassigned_in(
+            locals,
+            "while (I < 3) { Take(H); switch (I) { case 0: H = Make(); continue; } return; }"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn expressions_are_looked_into() {
+    let locals = "local Helpers H;\nlocal class<Helpers> C;\nlocal Object O;";
+    assert_eq!(
+        unassigned_in(
+            locals,
+            "O = new(H) C;\nO = new C;\nO = new class'Helpers';\nO = Helpers(H);\nO = (H);\nO = H.Next.default.Next;\nO = H.static.Make();\nO = default.Next;\nO = static.Make();"
+        ),
+        found(&[
+            (1, "H"),
+            (1, "C"),
+            (2, "C"),
+            (4, "H"),
+            (5, "H"),
+            (6, "H"),
+            (7, "H")
+        ])
+    );
+}
+
+#[test]
+fn unassigned_locals_need_their_types() {
+    // Any type may be a struct or an enum of the missing parent, even one
+    // with a class's name.
+    let orphan = "class Orphan extends Missing;\n\
+        function F() { local Thing T; local Orphan O; T.X(); O.X(); }\n";
+    assert!(unassigned(&[OBJECT, orphan]).is_empty());
+    // A type nobody declares.
+    let lost = "class Lost extends Object;\nfunction F() { local Nowhere N; N.X(); }\n";
+    assert!(unassigned(&[OBJECT, lost]).is_empty());
+}
+
+#[test]
+fn functions_with_goto_are_not_looked_at() {
+    for body in [
+        "goto 'L';\nL:\nTake(H);",
+        "if (I > 0) { L: Take(H); } else Take(H);",
+        "while (I > 0) L: Take(H);",
+        "for (;;) { L: Take(H); }",
+        "do { L: Take(H); } until (I > 0);",
+        "foreach AllObjects(class'Helpers', G) { L: Take(H); }",
+        "switch (I) { case 0: L: Take(H); }",
+    ] {
+        assert!(
+            unassigned_in("local Helpers H, G;\nlocal int I;", body).is_empty(),
+            "{}",
+            body
+        );
+    }
+    // The same without the label.
+    assert_eq!(
+        unassigned_in(
+            "local Helpers H;\nlocal int I;",
+            "switch (I) { case 0: Take(H); }"
+        ),
+        found(&[(1, "H")])
+    );
+}
+
+/// The `(line, text)` of each problem of `lint` in the last source's class.
+fn problems_of(lint: Lint, sources: &[&str]) -> Vec<(usize, String)> {
+    let p = project(sources);
+    let last = sources.last().unwrap();
+    let class = p.classes().last().unwrap();
+    project_lint::lint(&p, class, last)
+        .into_iter()
+        .filter(|e| e.lint == Some(lint))
+        .map(|e| {
+            assert_eq!(e.severity, lint.severity());
+            (
+                e.span.line.unwrap(),
+                last[e.span.start..e.span.end].to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_bool_local_tested_where_nothing_assigns_it() {
+    let source = "class T extends Helpers;\n\
+        function GetFlag(out bool B) {}\n\
+        function F()\n\
+        {\n\
+        \x20   local bool bFound, bSet, bOut, bUsed;\n\
+        \x20   local int I;\n\
+        \x20   if (bFound) {}\n\
+        \x20   if (!bFound && I > 0 || bFound) {}\n\
+        \x20   while (bFound) {}\n\
+        \x20   bSet = true;\n\
+        \x20   if (bSet) {}\n\
+        \x20   GetFlag(bOut);\n\
+        \x20   if (bOut) {}\n\
+        \x20   I = int(bUsed);\n\
+        \x20   for (I = 0; I < 3; I++) { if (bUsed) {} bUsed = true; }\n\
+        }\n";
+    assert_eq!(
+        problems_of(Lint::UnassignedBoolCondition, &[OBJECT, HELPERS, source]),
+        found(&[(7, "bFound"), (8, "bFound"), (8, "bFound"), (9, "bFound")])
+    );
+    let p = project(&[OBJECT, HELPERS, source]);
+    let errors = project_lint::check(&p, p.class("T").unwrap());
+    let message = &errors
+        .iter()
+        .find(|e| e.lint == Some(Lint::UnassignedBoolCondition))
+        .unwrap()
+        .message;
+    assert_eq!(
+        message,
+        "`bFound` is always `False` here: nothing can have assigned it"
+    );
+    // An object local isn't a `bool`, nor the other way round.
+    assert!(problems_of(Lint::UnassignedObjectLocal, &[OBJECT, HELPERS, source]).is_empty());
+}
+
+const HOOKS: &str = "class Hooks extends Object;\n\
+    function Hook(out int X) {}\n\
+    function int Answer(out int X) { return 0; }\n\
+    function Overridden(out int X) { Log(1); }\n\
+    delegate OnEvent(out int X);\n";
+
+#[test]
+fn out_arguments_a_function_never_uses() {
+    let source = "class T extends Hooks;\n\
+        function Lost(out int Result, out int Used, int Plain) { Log(Plain); Used = 1; }\n\
+        function ReadOnly(out int X) { Log(X); }\n\
+        function Overridden(out int X) { Log(2); }\n\
+        event Fired(out int X) { Log(3); }\n\
+        function Handler(out int X) { Log(4); }\n\
+        function Coded(out int X) { Log(5); }\n\
+        function Inherited(out int X) { Log(6); }\n\
+        function Setup() { OnEvent = Coded; }\n\
+        state S { function InState(out int X) { Log(7); } }\n\
+        defaultproperties\n\
+        {\n\
+        \x20   OnEvent=Handler\n\
+        }\n";
+    let child = "class Child extends T;\ndefaultproperties\n{\n    OnEvent=Inherited\n}\n";
+    let p = project(&[OBJECT, HOOKS, source, child]);
+    let class = p.class("T").unwrap();
+    let errors: Vec<_> = project_lint::check(&p, class)
+        .into_iter()
+        .filter(|e| e.lint == Some(Lint::UnassignedOutArgument))
+        .collect();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0].message,
+        "`Result` is an `out` argument, but `Lost` never uses it"
+    );
+    // Hooks that do nothing, or only return a literal, are for overriding;
+    // without its override, `Overridden` is reported.
+    assert_eq!(
+        problems_of(Lint::UnassignedOutArgument, &[OBJECT, HOOKS]),
+        found(&[(4, "X")])
+    );
+    // A class whose parents aren't all known may override anything.
+    let orphan = "class Orphan extends Missing;\nfunction Lost(out int X) { Log(1); }\n";
+    assert!(problems_of(Lint::UnassignedOutArgument, &[OBJECT, orphan]).is_empty());
+}

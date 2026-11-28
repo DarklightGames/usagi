@@ -7,13 +7,15 @@
 //! class's parents, so a class whose parent isn't in the project is never
 //! reported for what it might inherit.
 
-use crate::ast::{FunctionModifierType, FunctionTypeType, Identifier};
+use crate::ast::{
+    FunctionArgumentModifier, FunctionModifierType, FunctionTypeType, Identifier, PodType,
+};
 use crate::lint::Lint;
 use crate::parser::ProgramError;
 use crate::project::Declaration;
 use crate::project::{ClassId, Lookup, Project};
 use crate::suppression::Suppressions;
-use crate::symbols::{Namespace, Operand, ReferenceKind, SymbolId, SymbolKind};
+use crate::symbols::{Namespace, Operand, ReferenceKind, ScopeKind, SymbolId, SymbolKind, TypeRef};
 use crate::typing;
 use crate::{LineIndex, source};
 use std::collections::HashSet;
@@ -44,6 +46,9 @@ pub fn check(project: &Project, class: ClassId) -> Vec<ProgramError> {
     undeclared_default_properties(project, class, &mut errors);
     non_exhaustive_switches(project, class, &mut errors);
     could_be_static(project, class, &mut errors);
+    actor_references_in_objects(project, class, &mut errors);
+    unassigned_object_locals(project, class, &mut errors);
+    unused_out_arguments(project, class, &mut errors);
     errors
 }
 
@@ -264,5 +269,285 @@ fn could_be_static(project: &Project, class: ClassId, errors: &mut Vec<ProgramEr
             lint: Some(lint),
             fix: None,
         });
+    }
+}
+
+/// The `Actor` class: `Engine.Actor`, or failing that (when packages aren't
+/// known) any class named `Actor`.
+fn actor_class(project: &Project) -> Option<ClassId> {
+    project
+        .class("Engine.Actor")
+        .or_else(|| project.class("Actor"))
+}
+
+/// How a type written in `class` holds a reference to an actor, if it does:
+/// the actor class it names, after the members of structs it goes through
+/// (`Inner.Pawn`, say). Arrays of either are looked through. `seen` holds the
+/// structs already looked into, so a struct is looked into once.
+fn actor_in_type(
+    project: &Project,
+    actor: ClassId,
+    class: ClassId,
+    type_: &TypeRef,
+    seen: &mut HashSet<Declaration>,
+) -> Option<(Vec<String>, ClassId)> {
+    let name = match type_ {
+        TypeRef::Array(inner) => return actor_in_type(project, actor, class, inner, seen),
+        TypeRef::Named(name) => name,
+        // `class<Actor>` is a reference to a class, which is never destroyed.
+        TypeRef::Pod(_) | TypeRef::Class(_) => return None,
+    };
+    if let Some(named) = project.class_from(class, name) {
+        return project
+            .is_subclass(named, actor)
+            .then(|| (Vec::new(), named));
+    }
+    let struct_ = project.resolve_type(class, name).found()?;
+    if !matches!(project.symbol(struct_).kind, SymbolKind::Struct) || !seen.insert(struct_) {
+        return None;
+    }
+    let table = project.table(struct_.class);
+    let scope = table
+        .scopes()
+        .find(|(_, scope)| scope.kind == ScopeKind::Struct(struct_.symbol))
+        .expect("a struct has a scope")
+        .1;
+    scope.symbols().iter().find_map(|&member| {
+        let symbol = table.symbol(member);
+        let type_ = symbol
+            .kind
+            .type_()
+            .expect("a struct scope declares only members");
+        let (mut path, found) = actor_in_type(project, actor, struct_.class, type_, seen)?;
+        path.insert(0, symbol.name.as_str().to_string());
+        Some((path, found))
+    })
+}
+
+fn actor_references_in_objects(project: &Project, class: ClassId, errors: &mut Vec<ProgramError>) {
+    let lint = Lint::ActorReferenceInObject;
+    let Some(actor) = actor_class(project) else {
+        return;
+    };
+    // A class whose parents aren't all known may be an actor.
+    if !project.is_complete(class) || project.is_subclass(class, actor) {
+        return;
+    }
+    let table = project.table(class);
+    for (_, symbol) in table.iter() {
+        let SymbolKind::Variable { type_, .. } = &symbol.kind else {
+            continue;
+        };
+        let Some((path, found)) = actor_in_type(project, actor, class, type_, &mut HashSet::new())
+        else {
+            continue;
+        };
+        let through = if path.is_empty() {
+            String::new()
+        } else {
+            format!(" (through `{}`)", path.join("."))
+        };
+        errors.push(ProgramError {
+            message: format!(
+                "`{}` in `{}`, which isn't an actor, holds a reference to an actor (`{}`){}: \
+                 the garbage collector can crash the game on it",
+                symbol.name.as_str(),
+                project.name(class),
+                project.name(found),
+                through,
+            ),
+            span: symbol.span,
+            severity: lint.severity(),
+            lint: Some(lint),
+            fix: None,
+        });
+    }
+}
+
+/// Whether a type names a class, so that a value of it may be `None`: a
+/// `class<...>`, or a name that is a class and not a struct or enum. `None`
+/// if the project can't tell.
+fn is_object_type(project: &Project, class: ClassId, type_: &TypeRef) -> Option<bool> {
+    // Only C019's object locals get here: a named type or `class<...>`.
+    let TypeRef::Named(name) = type_ else {
+        return Some(true);
+    };
+    match project.resolve_type(class, name) {
+        Lookup::Found(_) => Some(false),
+        Lookup::Unknown => None,
+        Lookup::NotFound => project.class_from(class, name).map(|_| true),
+    }
+}
+
+/// The function a call's callee names, in `scope` of `class`: `F` (the
+/// class's, or one it inherits) or `Obj.F` (of the class of `Obj`'s type).
+fn called_function(
+    project: &Project,
+    class: ClassId,
+    scope: crate::symbols::ScopeId,
+    callee: &Operand,
+) -> Option<Declaration> {
+    match callee {
+        Operand::Name(name) => match project
+            .table(class)
+            .lookup(scope, Namespace::Function, name)
+        {
+            Some(symbol) => Some(Declaration { class, symbol }),
+            None => project.lookup(class, Namespace::Function, name).found(),
+        },
+        Operand::Member(base, name) => {
+            let base = typing::type_of(project, class, scope, base)?;
+            let TypeRef::Named(type_name) = &base.type_ else {
+                return None;
+            };
+            if base.static_array {
+                return None;
+            }
+            let owner = project.class_from(base.class, type_name)?;
+            project.lookup(owner, Namespace::Function, name).found()
+        }
+        _ => None,
+    }
+}
+
+/// Whether the call can't assign its argument at `argument`: the function is
+/// known, and that argument isn't `out`. An argument past the last one isn't.
+fn cannot_assign(
+    project: &Project,
+    class: ClassId,
+    scope: crate::symbols::ScopeId,
+    (callee, argument): &(Operand, usize),
+) -> bool {
+    let Some(function) = called_function(project, class, scope, callee) else {
+        // `Pawn(X)`, `EColor(X)`: a cast to a type, when no function has that
+        // name.
+        return matches!(callee, Operand::Name(name)
+            if project.lookup(class, Namespace::Function, name) == Lookup::NotFound
+                && (project.class_from(class, name).is_some()
+                    || project.resolve_type(class, name).found().is_some()));
+    };
+    let table = project.table(function.class);
+    let function_scope = table
+        .scope_of(project.symbol(function).span.start)
+        .expect("a function has a scope");
+    let out = table
+        .scope(function_scope)
+        .symbols()
+        .iter()
+        .filter_map(|&s| match &table.symbol(s).kind {
+            SymbolKind::Argument { modifiers, .. } => {
+                Some(modifiers.contains(&FunctionArgumentModifier::Out))
+            }
+            _ => None,
+        })
+        .nth(*argument);
+    out != Some(true)
+}
+
+/// C019 for object locals and C020 for `bool` locals tested in conditions.
+fn unassigned_object_locals(project: &Project, class: ClassId, errors: &mut Vec<ProgramError>) {
+    let table = project.table(class);
+    for read in table.unassigned_reads() {
+        let local = table.symbol(read.local);
+        let type_ = local.kind.type_().expect("a local has a type");
+        let (lint, value) = if *type_ == TypeRef::Pod(PodType::Bool) {
+            (Lint::UnassignedBoolCondition, "False")
+        } else {
+            (Lint::UnassignedObjectLocal, "None")
+        };
+        if (lint == Lint::UnassignedObjectLocal
+            && is_object_type(project, class, type_) != Some(true))
+            || (lint == Lint::UnassignedBoolCondition && !read.condition)
+            || !read
+                .calls
+                .iter()
+                .all(|call| cannot_assign(project, class, read.scope, call))
+        {
+            continue;
+        }
+        errors.push(ProgramError {
+            message: format!(
+                "`{}` is always `{}` here: nothing can have assigned it",
+                local.name.as_str(),
+                value
+            ),
+            span: read.span,
+            severity: lint.severity(),
+            lint: Some(lint),
+            fix: None,
+        });
+    }
+}
+
+/// Whether `name` is assigned to a delegate in the `defaultproperties` of
+/// `class` or a class that extends it.
+fn assigned_in_defaults(project: &Project, class: ClassId, name: &Identifier) -> bool {
+    project
+        .table(class)
+        .default_value_names()
+        .iter()
+        .any(|n| n == name)
+        || project
+            .children(class)
+            .iter()
+            .any(|&child| assigned_in_defaults(project, child, name))
+}
+
+/// S020: an `out` argument the function never uses, in a function whose
+/// signature is its own. One that overrides another or is overridden, an
+/// event or a delegate, or a function assigned to a delegate (in code or in
+/// `defaultproperties`) must keep the signature it has.
+fn unused_out_arguments(project: &Project, class: ClassId, errors: &mut Vec<ProgramError>) {
+    let lint = Lint::UnassignedOutArgument;
+    if !project.is_complete(class) {
+        return;
+    }
+    let table = project.table(class);
+    for (id, symbol) in table.iter() {
+        let SymbolKind::Function {
+            types,
+            has_body: true,
+            ..
+        } = &symbol.kind
+        else {
+            continue;
+        };
+        let declaration = Declaration { class, symbol: id };
+        if symbol.scope != crate::symbols::ScopeId::CLASS
+            || table.function_is_stub(id)
+            || assigned_in_defaults(project, class, &symbol.name)
+            || types != &[FunctionTypeType::Function]
+            || table
+                .references_to(id)
+                .any(|r| r.kind != ReferenceKind::Call)
+            || project.overridden(declaration).is_some()
+            || !project.overriders(declaration).is_empty()
+        {
+            continue;
+        }
+        let scope = table
+            .scope_of(symbol.span.start)
+            .expect("a function with a body has a scope");
+        for &argument in table.scope(scope).symbols() {
+            let SymbolKind::Argument { modifiers, .. } = &table.symbol(argument).kind else {
+                continue;
+            };
+            if !modifiers.contains(&FunctionArgumentModifier::Out)
+                || table.references_to(argument).next().is_some()
+            {
+                continue;
+            }
+            errors.push(ProgramError {
+                message: format!(
+                    "`{}` is an `out` argument, but `{}` never uses it",
+                    table.symbol(argument).name.as_str(),
+                    symbol.name.as_str()
+                ),
+                span: table.symbol(argument).span,
+                severity: lint.severity(),
+                lint: Some(lint),
+                fix: None,
+            });
+        }
     }
 }

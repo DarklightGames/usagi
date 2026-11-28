@@ -32,6 +32,23 @@ Done (steps 0 to 4, the graph of 6 and the first typing of 7, of [Order of work]
 - S019 `could-be-static`, from the names function bodies use that the file
   doesn't declare (`SymbolTable::unresolved_uses`) and the instance members
   they use that it does (`SymbolTable::instance_use`).
+- C018 `actor-reference-in-object`, from the declared types of a class's
+  variables, resolved through the project to classes and structs.
+- C019 `unassigned-object-local`, from a dataflow pass over each function
+  body (`usagi_core::flow`), run while the symbol table is built: it records
+  the reads of an object local that no assignment reaches
+  (`SymbolTable::unassigned_reads`), each with the calls the local was given
+  to before. The project lint looks those calls' functions up and reports a
+  read only if none of them has an `out` argument there. C020
+  `unassigned-bool-condition` uses the same records, for `bool` locals tested
+  in conditions. The pass also finds, by itself and per file, C021
+  `known-none-access`, S021 `loop-runs-once` and S022 `unchecked-spawn`
+  (`SymbolTable::flow_problems`, reported by the visitor).
+- S020 `unassigned-out-argument`, from the references the table keeps, with
+  functions named as values in `defaultproperties` counted as references
+  (`SymbolTable::default_value_names` keeps the names, for subclasses that
+  assign an inherited function to a delegate), and the overrides the project
+  knows.
 - Minimal typing, and the lint that needed it: S018 `non-exhaustive-switch`,
   opt-in (steps 4d and 7, in part). The symbol table records each `switch`
   (its subject and `case` labels as `Operand`s, names that can be looked up
@@ -183,6 +200,8 @@ First step, hierarchy and enums:
   the hierarchy (S018; done).
 - A `defaultproperties` key not declared anywhere in the hierarchy (C017;
   done). A delegate is declared as a function, so it counts.
+- A non-`Actor` `Object` holding `Actor` references (C018; done), in its
+  variables, their arrays and the members of their structs.
 - An override with a different signature from the one it overrides.
 - A redundant `defaultproperties` value equal to the parent's.
 - A `config` variable that isn't `config` anywhere in its hierarchy.
@@ -194,7 +213,6 @@ Later, with more typing:
 
 - Argument types against function signatures (a string given to
   `GotoState`).
-- A non-`Actor` `Object` holding `Actor` references.
 - `private` and `protected` access across classes.
 - A missing `Super.X()` in overrides of functions that need one (an
   opt-in list in the configuration).

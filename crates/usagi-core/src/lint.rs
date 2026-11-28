@@ -119,17 +119,26 @@ macro_rules! lints {
             /// Whether the lint looks at other classes (see
             /// [`crate::project`]), and is checked by [`crate::project_lint`]
             /// once the project is indexed, not while parsing a file.
-            ///
-            /// Such a lint is opt-in: only a selector that names it, by its
-            /// code or its name, selects it. `ALL`, a prefix of its code
-            /// and its category don't.
+            /// Such a lint is opt-in (see [`Lint::is_opt_in`]).
             pub fn needs_project(self) -> bool {
                 matches!(
                     self,
                     Lint::UndeclaredDefaultProperty
                         | Lint::NonExhaustiveSwitch
                         | Lint::CouldBeStatic
+                        | Lint::ActorReferenceInObject
+                        | Lint::UnassignedObjectLocal
+                        | Lint::UnassignedBoolCondition
+                        | Lint::UnassignedOutArgument
                 )
+            }
+
+            /// Whether the lint is opt-in: only a selector that names it, by
+            /// its code or its name, selects it. `ALL`, a prefix of its code
+            /// and its category don't. Every lint that needs the project is,
+            /// and so are lints too noisy to run by default.
+            pub fn is_opt_in(self) -> bool {
+                self.needs_project() || matches!(self, Lint::UncheckedSpawn)
             }
 
             /// Looks a lint up by its code or name (case-insensitive).
@@ -176,6 +185,14 @@ lints! {
         "The class name differs from the name of its `.uc` file."),
     UndeclaredDefaultProperty = ("C017", "undeclared-default-property", Correctness, Warning, Never,
         "A `defaultproperties` property that no class in the hierarchy declares. Opt-in."),
+    ActorReferenceInObject = ("C018", "actor-reference-in-object", Correctness, Error, Never,
+        "A variable of a class that isn't an `Actor` holds a reference to an `Actor`. Opt-in."),
+    UnassignedObjectLocal = ("C019", "unassigned-object-local", Correctness, Error, Never,
+        "An object local read where nothing can have assigned it, so it's always `None`. Opt-in."),
+    UnassignedBoolCondition = ("C020", "unassigned-bool-condition", Correctness, Error, Never,
+        "A `bool` local tested where nothing can have assigned it, so it's always `False`. Opt-in."),
+    KnownNoneAccess = ("C021", "known-none-access", Correctness, Error, Never,
+        "A local or argument used where it's known to be `None`: an Accessed None."),
 
     // Suspicious
     EmptyBody = ("S001", "empty-body", Suspicious, Warning, Never,
@@ -216,6 +233,12 @@ lints! {
         "A `switch` on an enum with no `default` that doesn't handle every value. Opt-in."),
     CouldBeStatic = ("S019", "could-be-static", Suspicious, Warning, Never,
         "A function that uses nothing of the object it's called on and could be `static`. Opt-in."),
+    UnassignedOutArgument = ("S020", "unassigned-out-argument", Suspicious, Warning, Never,
+        "An `out` argument that a function never uses. Opt-in."),
+    LoopRunsOnce = ("S021", "loop-runs-once", Suspicious, Warning, Never,
+        "A loop whose body always leaves it, so it never goes round again."),
+    UncheckedSpawn = ("S022", "unchecked-spawn", Suspicious, Warning, Never,
+        "The result of `Spawn` or `DynamicLoadObject` used without checking it for `None`. Opt-in."),
     // Performance
     ActorIteratorInPerFrameFunction = ("P001", "actor-iterator-in-per-frame-function", Performance, Warning, Never,
         "`foreach AllActors`/`DynamicActors` in a function called every frame, such as `Tick`."),
@@ -339,7 +362,7 @@ impl LintSelection {
 
 pub(crate) fn selector_matches(selector: &str, lint: Lint) -> bool {
     let selector = selector.trim();
-    if lint.needs_project() {
+    if lint.is_opt_in() {
         return selector.eq_ignore_ascii_case(lint.code())
             || selector.eq_ignore_ascii_case(lint.name());
     }
