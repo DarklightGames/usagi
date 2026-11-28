@@ -543,10 +543,11 @@ fn lint_runs_the_flow_lints() {
             .unwrap();
         String::from_utf8(output.stdout).unwrap()
     };
-    // C021 runs by default.
+    // C021 and S021 run by default.
     assert_eq!(
         run(&["--select", "ALL"]),
-        "Mod/Classes/Bar.uc:7:20: C021 `P` is `None` here, so using it is an Accessed None\n"
+        "Mod/Classes/Bar.uc:7:20: C021 `P` is `None` here, so using it is an Accessed None\n\
+         Mod/Classes/Bar.uc:11:5: S021 this loop never goes round again: every path through its body leaves it\n"
     );
 }
 

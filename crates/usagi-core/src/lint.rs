@@ -224,6 +224,8 @@ lints! {
         "A `switch` on an enum with no `default` that doesn't handle every value. Opt-in."),
     CouldBeStatic = ("S019", "could-be-static", Suspicious, Warning, Never,
         "A function that uses nothing of the object it's called on and could be `static`. Opt-in."),
+    LoopRunsOnce = ("S021", "loop-runs-once", Suspicious, Warning, Never,
+        "A loop whose body always leaves it, so it never goes round again."),
     // Performance
     ActorIteratorInPerFrameFunction = ("P001", "actor-iterator-in-per-frame-function", Performance, Warning, Never,
         "`foreach AllActors`/`DynamicActors` in a function called every frame, such as `Tick`."),

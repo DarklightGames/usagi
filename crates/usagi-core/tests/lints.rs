@@ -2013,3 +2013,31 @@ fn known_none_access_in_loops() {
         at(&[(1, "P"), (3, "Q")])
     );
 }
+
+#[test]
+fn loop_runs_once() {
+    let s021 = |body: &str| found_in("S021", "local int I;\nlocal Actor A;", body);
+    assert_eq!(
+        s021(
+            "for (I = 0; I < 3; I++) { if (I > P.Tag) return; else return; }\n\
+             while (I < 3) break;\n\
+             do { I++; break; } until (I > 3);"
+        ),
+        at(&[(1, "for"), (2, "while"), (3, "do")])
+    );
+    // A loop that can go round, or `foreach` taking the first.
+    assert!(
+        s021(
+            "for (I = 0; I < 3; I++) { if (I > 1) return; }\n\
+             while (I < 3) { I++; if (I > 1) continue; break; }\n\
+             foreach AllActors(class'Actor', A) return;\n\
+             return;\nwhile (I < 3) break;"
+        )
+        .is_empty()
+    );
+    // Nested: the inner loop runs once, the outer goes round.
+    assert_eq!(
+        s021("while (I < 3) { I++; while (I < 3) return; }"),
+        at(&[(1, "while")])
+    );
+}

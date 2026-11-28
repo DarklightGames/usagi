@@ -5,7 +5,8 @@
 //!   that may have assigned them (an `out` argument), for C019
 //!   `unassigned-object-local`;
 //! - which locals and arguments are known to be `None`, from a comparison
-//!   with `None` or an assignment of it, for C021 `known-none-access`.
+//!   with `None` or an assignment of it, for C021 `known-none-access`;
+//! - and whether a loop can go round again, for S021 `loop-runs-once`.
 //!
 //! The pass knows the file and nothing else, so a call that a local is given
 //! to may assign it (an `out` argument) or not. For C019 it records
@@ -132,8 +133,8 @@ struct Flow<'t> {
     /// The latest finding at each read, by its start: the last visit is the
     /// one with the most complete state.
     reads: BTreeMap<usize, Option<UnassignedRead>>,
-    /// The latest problem at each use of a variable, by its start,
-    /// likewise.
+    /// The latest problem at each use of a variable, and at each loop, by
+    /// start, likewise.
     problems: BTreeMap<usize, Option<FlowProblem>>,
 }
 
@@ -221,6 +222,15 @@ fn unparenthesize(mut expression: &AstNode<Expression>) -> &AstNode<Expression> 
 fn is_none_literal(expression: &AstNode<Expression>) -> bool {
     matches!(&unparenthesize(expression).data,
         Expression::Literal(literal) if matches!(literal.data, Literal::None))
+}
+
+/// The span of a loop's keyword, where the problem is reported.
+fn keyword_span(statement: &AstNode<CodeStatement>, keyword: &str) -> AstSpan {
+    AstSpan {
+        start: statement.span.start,
+        end: statement.span.start + keyword.len(),
+        line: None,
+    }
 }
 
 impl Flow<'_> {
@@ -334,8 +344,13 @@ impl Flow<'_> {
     /// Runs a loop: `step` runs one pass from the state at the loop's head,
     /// leaving the state that goes back to the head. Returns the state that
     /// leaves the loop by its condition (`step` sets it in `exit`), joined
-    /// with the `break`s.
-    fn run_loop(&mut self, mut step: impl FnMut(&mut Self, &mut State)) -> State {
+    /// with the `break`s. If `keyword` is given, a loop whose body can never
+    /// go round again is reported there.
+    fn run_loop(
+        &mut self,
+        keyword: Option<AstSpan>,
+        mut step: impl FnMut(&mut Self, &mut State),
+    ) -> State {
         let entry = std::mem::replace(&mut self.state, State::unreachable());
         let mut head = entry.clone();
         loop {
@@ -347,7 +362,18 @@ impl Flow<'_> {
             let mut exit = State::unreachable();
             step(self, &mut exit);
             let jumps = self.jumps.pop().expect("pushed above");
-            let next = entry.clone().joined(&self.state).joined(&jumps.continues);
+            let back = std::mem::take(&mut self.state).joined(&jumps.continues);
+            if let Some(span) = keyword.filter(|_| head.reachable) {
+                let problem = (!back.reachable).then(|| FlowProblem {
+                    lint: Lint::LoopRunsOnce,
+                    message: "this loop never goes round again: every path through its \
+                              body leaves it"
+                        .to_string(),
+                    span,
+                });
+                self.problems.insert(span.start, problem);
+            }
+            let next = entry.clone().joined(&back);
             if next == head {
                 return exit.joined(&jumps.breaks);
             }
@@ -391,13 +417,15 @@ impl Flow<'_> {
                         }
                     }
                 }
-                self.state = self.run_loop(|flow, exit| {
+                // Not reported if it runs once: taking the first is an idiom.
+                self.state = self.run_loop(None, |flow, exit| {
                     exit.join(&flow.state);
                     flow.body(&f.body);
                 });
             }
             CodeStatement::While(w) => {
-                self.state = self.run_loop(|flow, exit| {
+                let keyword = keyword_span(statement, "while");
+                self.state = self.run_loop(Some(keyword), |flow, exit| {
                     let (yes, no) = flow.condition(&w.predicate);
                     exit.join(&no);
                     flow.state = yes;
@@ -408,7 +436,8 @@ impl Flow<'_> {
                 if let Some(init) = &f.init {
                     self.expression(init);
                 }
-                self.state = self.run_loop(|flow, exit| {
+                let keyword = keyword_span(statement, "for");
+                self.state = self.run_loop(Some(keyword), |flow, exit| {
                     if let Some(predicate) = &f.predicate {
                         let (yes, no) = flow.condition(predicate);
                         exit.join(&no);
@@ -423,7 +452,8 @@ impl Flow<'_> {
                 });
             }
             CodeStatement::DoUntil(d) => {
-                self.state = self.run_loop(|flow, exit| {
+                let keyword = keyword_span(statement, "do");
+                self.state = self.run_loop(Some(keyword), |flow, exit| {
                     flow.body(&d.body);
                     let continues = flow.jumps.last().expect("in a loop").continues.clone();
                     flow.state.join(&continues);
