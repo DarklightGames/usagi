@@ -10,6 +10,7 @@
 //! All spans are byte offsets into the file.
 
 use crate::ast::*;
+use crate::flow::UnassignedRead;
 use std::collections::HashMap;
 
 /// Identifies a [`Symbol`] in its [`SymbolTable`].
@@ -288,7 +289,7 @@ pub enum Operand {
 }
 
 impl Operand {
-    fn of(expression: &Expression) -> Operand {
+    pub(crate) fn of(expression: &Expression) -> Operand {
         match expression {
             Expression::Identifier(name) if name.eq_ignore_ascii_case("self") => Operand::This,
             Expression::Identifier(name) => Operand::Name(name.data.clone()),
@@ -357,6 +358,7 @@ pub struct SymbolTable {
     /// the file declares.
     instance_uses: HashMap<ScopeId, AstSpan>,
     switches: Vec<SwitchRecord>,
+    unassigned_reads: Vec<UnassignedRead>,
 }
 
 /// A name that a file uses but doesn't declare.
@@ -397,6 +399,7 @@ impl SymbolTable {
             unresolved_uses: Vec::new(),
             instance_uses: HashMap::new(),
             switches: Vec::new(),
+            unassigned_reads: Vec::new(),
         };
         table.add_scope(ScopeKind::Class, None);
         table.declare_program(program);
@@ -508,6 +511,13 @@ impl SymbolTable {
         &self.switches
     }
 
+    /// The reads of a local that may hold an object (of a named type or
+    /// `class<...>`, and not an array) that no assignment reaches, unless one
+    /// of the calls each lists assigns it (an `out` argument). In order.
+    pub fn unassigned_reads(&self) -> &[UnassignedRead] {
+        &self.unassigned_reads
+    }
+
     /// Every resolved reference, sorted by position.
     pub fn references(&self) -> &[Reference] {
         &self.references
@@ -546,6 +556,9 @@ impl SymbolTable {
         }
         for switch in &mut self.switches {
             switch.span.line = Some(line_of(switch.span.start));
+        }
+        for read in &mut self.unassigned_reads {
+            read.span.line = Some(line_of(read.span.start));
         }
         if let Some(class) = &mut self.class {
             class.span.line = Some(line_of(class.span.start));
@@ -1028,6 +1041,8 @@ impl Resolver<'_> {
                     FunctionBodyStatement::CodeStatement(s) => r.statement(s),
                 }
             }
+            let reads = crate::flow::unassigned_reads(r.table, scope, body);
+            r.table.unassigned_reads.extend(reads);
         });
     }
 

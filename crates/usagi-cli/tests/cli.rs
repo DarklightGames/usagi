@@ -490,6 +490,31 @@ fn lint_reports_actor_references_in_objects() {
 }
 
 #[test]
+fn lint_reports_unassigned_object_locals() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", "class Object;\n"),
+        (
+            "Mod/Classes/Bar.uc",
+            "class Bar extends Object;\nfunction Bar Get()\n{\n    local Bar B;\n    return B;\n}\n",
+        ),
+    ]);
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert_eq!(run(&["--select", "ALL"]), "");
+    assert_eq!(
+        run(&["--select", "unassigned-object-local"]),
+        "Mod/Classes/Bar.uc:5:12: C019 `B` is always `None` here: nothing can have assigned it\n"
+    );
+    assert_eq!(run(&["--select", "C019", "--no-project"]), "");
+}
+
+#[test]
 fn undeclared_default_properties_by_configuration() {
     let dir = project(&[
         (

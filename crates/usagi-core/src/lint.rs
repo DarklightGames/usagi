@@ -130,6 +130,7 @@ macro_rules! lints {
                         | Lint::NonExhaustiveSwitch
                         | Lint::CouldBeStatic
                         | Lint::ActorReferenceInObject
+                        | Lint::UnassignedObjectLocal
                 )
             }
 
@@ -179,6 +180,8 @@ lints! {
         "A `defaultproperties` property that no class in the hierarchy declares. Opt-in."),
     ActorReferenceInObject = ("C018", "actor-reference-in-object", Correctness, Error, Never,
         "A variable of a class that isn't an `Actor` holds a reference to an `Actor`. Opt-in."),
+    UnassignedObjectLocal = ("C019", "unassigned-object-local", Correctness, Error, Never,
+        "An object local read where nothing can have assigned it, so it's always `None`. Opt-in."),
 
     // Suspicious
     EmptyBody = ("S001", "empty-body", Suspicious, Warning, Never,

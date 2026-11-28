@@ -34,6 +34,12 @@ Done (steps 0 to 4, the graph of 6 and the first typing of 7, of [Order of work]
   they use that it does (`SymbolTable::instance_use`).
 - C018 `actor-reference-in-object`, from the declared types of a class's
   variables, resolved through the project to classes and structs.
+- C019 `unassigned-object-local`, from a dataflow pass over each function
+  body (`usagi_core::flow`), run while the symbol table is built: it records
+  the reads of an object local that no assignment reaches
+  (`SymbolTable::unassigned_reads`), each with the calls the local was given
+  to before. The project lint looks those calls' functions up and reports a
+  read only if none of them has an `out` argument there.
 - Minimal typing, and the lint that needed it: S018 `non-exhaustive-switch`,
   opt-in (steps 4d and 7, in part). The symbol table records each `switch`
   (its subject and `case` labels as `Operand`s, names that can be looked up

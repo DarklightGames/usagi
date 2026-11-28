@@ -7,7 +7,7 @@
 //! class's parents, so a class whose parent isn't in the project is never
 //! reported for what it might inherit.
 
-use crate::ast::{FunctionModifierType, FunctionTypeType, Identifier};
+use crate::ast::{FunctionArgumentModifier, FunctionModifierType, FunctionTypeType, Identifier};
 use crate::lint::Lint;
 use crate::parser::ProgramError;
 use crate::project::Declaration;
@@ -45,6 +45,7 @@ pub fn check(project: &Project, class: ClassId) -> Vec<ProgramError> {
     non_exhaustive_switches(project, class, &mut errors);
     could_be_static(project, class, &mut errors);
     actor_references_in_objects(project, class, &mut errors);
+    unassigned_object_locals(project, class, &mut errors);
     errors
 }
 
@@ -353,6 +354,113 @@ fn actor_references_in_objects(project: &Project, class: ClassId, errors: &mut V
                 through,
             ),
             span: symbol.span,
+            severity: lint.severity(),
+            lint: Some(lint),
+            fix: None,
+        });
+    }
+}
+
+/// Whether a type names a class, so that a value of it may be `None`: a
+/// `class<...>`, or a name that is a class and not a struct or enum. `None`
+/// if the project can't tell.
+fn is_object_type(project: &Project, class: ClassId, type_: &TypeRef) -> Option<bool> {
+    // The flow pass tracks only locals of a named type or `class<...>`.
+    let TypeRef::Named(name) = type_ else {
+        return Some(true);
+    };
+    match project.resolve_type(class, name) {
+        Lookup::Found(_) => Some(false),
+        Lookup::Unknown => None,
+        Lookup::NotFound => project.class_from(class, name).map(|_| true),
+    }
+}
+
+/// The function a call's callee names, in `scope` of `class`: `F` (the
+/// class's, or one it inherits) or `Obj.F` (of the class of `Obj`'s type).
+fn called_function(
+    project: &Project,
+    class: ClassId,
+    scope: crate::symbols::ScopeId,
+    callee: &Operand,
+) -> Option<Declaration> {
+    match callee {
+        Operand::Name(name) => match project
+            .table(class)
+            .lookup(scope, Namespace::Function, name)
+        {
+            Some(symbol) => Some(Declaration { class, symbol }),
+            None => project.lookup(class, Namespace::Function, name).found(),
+        },
+        Operand::Member(base, name) => {
+            let base = typing::type_of(project, class, scope, base)?;
+            let TypeRef::Named(type_name) = &base.type_ else {
+                return None;
+            };
+            if base.static_array {
+                return None;
+            }
+            let owner = project.class_from(base.class, type_name)?;
+            project.lookup(owner, Namespace::Function, name).found()
+        }
+        _ => None,
+    }
+}
+
+/// Whether the call can't assign its argument at `argument`: the function is
+/// known, and that argument isn't `out`. An argument past the last one isn't.
+fn cannot_assign(
+    project: &Project,
+    class: ClassId,
+    scope: crate::symbols::ScopeId,
+    (callee, argument): &(Operand, usize),
+) -> bool {
+    let Some(function) = called_function(project, class, scope, callee) else {
+        // `Pawn(X)`, `EColor(X)`: a cast to a type, when no function has that
+        // name.
+        return matches!(callee, Operand::Name(name)
+            if project.lookup(class, Namespace::Function, name) == Lookup::NotFound
+                && (project.class_from(class, name).is_some()
+                    || project.resolve_type(class, name).found().is_some()));
+    };
+    let table = project.table(function.class);
+    let function_scope = table
+        .scope_of(project.symbol(function).span.start)
+        .expect("a function has a scope");
+    let out = table
+        .scope(function_scope)
+        .symbols()
+        .iter()
+        .filter_map(|&s| match &table.symbol(s).kind {
+            SymbolKind::Argument { modifiers, .. } => {
+                Some(modifiers.contains(&FunctionArgumentModifier::Out))
+            }
+            _ => None,
+        })
+        .nth(*argument);
+    out != Some(true)
+}
+
+fn unassigned_object_locals(project: &Project, class: ClassId, errors: &mut Vec<ProgramError>) {
+    let lint = Lint::UnassignedObjectLocal;
+    let table = project.table(class);
+    for read in table.unassigned_reads() {
+        let local = table.symbol(read.local);
+        let type_ = local.kind.type_().expect("a local has a type");
+        if is_object_type(project, class, type_) != Some(true)
+            || !read
+                .calls
+                .iter()
+                .all(|call| cannot_assign(project, class, read.scope, call))
+        {
+            continue;
+        }
+        errors.push(ProgramError {
+            message: format!(
+                "`{}` is always `None` here: nothing can have assigned it",
+                local.name.as_str()
+            ),
+            span: read.span,
             severity: lint.severity(),
             lint: Some(lint),
             fix: None,
