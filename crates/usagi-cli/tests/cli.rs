@@ -543,11 +543,19 @@ fn lint_runs_the_flow_lints() {
             .unwrap();
         String::from_utf8(output.stdout).unwrap()
     };
-    // C021 and S021 run by default.
+    // C021 and S021 run by default; S022 and the project lints only when named.
     assert_eq!(
         run(&["--select", "ALL"]),
         "Mod/Classes/Bar.uc:7:20: C021 `P` is `None` here, so using it is an Accessed None\n\
          Mod/Classes/Bar.uc:11:5: S021 this loop never goes round again: every path through its body leaves it\n"
+    );
+    assert_eq!(
+        run(&["--select", "S022"]),
+        "Mod/Classes/Bar.uc:10:5: S022 `A` may be `None` here: `Spawn` returns `None` when it fails, and nothing checks for that\n"
+    );
+    assert_eq!(
+        run(&["--select", "S022", "--no-project"]),
+        "Mod/Classes/Bar.uc:10:5: S022 `A` may be `None` here: `Spawn` returns `None` when it fails, and nothing checks for that\n"
     );
 }
 

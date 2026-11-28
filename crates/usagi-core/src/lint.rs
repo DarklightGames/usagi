@@ -119,10 +119,7 @@ macro_rules! lints {
             /// Whether the lint looks at other classes (see
             /// [`crate::project`]), and is checked by [`crate::project_lint`]
             /// once the project is indexed, not while parsing a file.
-            ///
-            /// Such a lint is opt-in: only a selector that names it, by its
-            /// code or its name, selects it. `ALL`, a prefix of its code
-            /// and its category don't.
+            /// Such a lint is opt-in (see [`Lint::is_opt_in`]).
             pub fn needs_project(self) -> bool {
                 matches!(
                     self,
@@ -132,6 +129,14 @@ macro_rules! lints {
                         | Lint::ActorReferenceInObject
                         | Lint::UnassignedObjectLocal
                 )
+            }
+
+            /// Whether the lint is opt-in: only a selector that names it, by
+            /// its code or its name, selects it. `ALL`, a prefix of its code
+            /// and its category don't. Every lint that needs the project is,
+            /// and so are lints too noisy to run by default.
+            pub fn is_opt_in(self) -> bool {
+                self.needs_project() || matches!(self, Lint::UncheckedSpawn)
             }
 
             /// Looks a lint up by its code or name (case-insensitive).
@@ -226,6 +231,8 @@ lints! {
         "A function that uses nothing of the object it's called on and could be `static`. Opt-in."),
     LoopRunsOnce = ("S021", "loop-runs-once", Suspicious, Warning, Never,
         "A loop whose body always leaves it, so it never goes round again."),
+    UncheckedSpawn = ("S022", "unchecked-spawn", Suspicious, Warning, Never,
+        "The result of `Spawn` or `DynamicLoadObject` used without checking it for `None`. Opt-in."),
     // Performance
     ActorIteratorInPerFrameFunction = ("P001", "actor-iterator-in-per-frame-function", Performance, Warning, Never,
         "`foreach AllActors`/`DynamicActors` in a function called every frame, such as `Tick`."),
@@ -349,7 +356,7 @@ impl LintSelection {
 
 pub(crate) fn selector_matches(selector: &str, lint: Lint) -> bool {
     let selector = selector.trim();
-    if lint.needs_project() {
+    if lint.is_opt_in() {
         return selector.eq_ignore_ascii_case(lint.code())
             || selector.eq_ignore_ascii_case(lint.name());
     }

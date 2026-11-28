@@ -50,7 +50,9 @@ usagi lint --format tsv --statistics <root> > lints.tsv
 A lint that needs the classes of the whole project (see
 [PROJECT_ANALYSIS.md](PROJECT_ANALYSIS.md)) is **opt-in**: only a selector
 that names it, by its code or its name, selects it. `ALL`, a code prefix and a
-category don't. They're marked "needs the project" in the list below.
+category don't. They're marked "needs the project" in the list below. A few
+lints that need no project are opt-in too, being too noisy to run by default
+(S022); they're marked "opt-in".
 
 ```sh
 usagi lint --extend-select C017 <root>
@@ -180,6 +182,7 @@ never applied from the command line; they are for an editor to offer.
 | S018 | `non-exhaustive-switch` | Warning |  | A `switch` on an enum with no `default` that has no `case` for some of the enum's values. The enum can be declared in the class or in any class it extends, and the subject can be a local, an argument, a variable (also a parent's, another object's, a struct's or an array element), what a function returns, or a cast to the enum. A bare `case` label is a value if the enum has one of that name, wherever the enum is declared: a class that only `dependson`s the enum's class sees it too, as in UCC. A `switch` whose subject's type isn't known, or with a `case` that isn't known to be a value of the enum (a literal, another enum's value, an expression), isn't reported. A `switch` with a `default` isn't reported, even if its cases leave out values. Needs the project, and is opt-in. |
 | S019 | `could-be-static` | Warning |  | A function that uses nothing of the object it's called on, so could be `static`: it names no variable or non-static function, and no `Self`, `Super` or `global`, whether declared in the class or inherited (`Default.X`, `Static.F()`, consts and static functions are fine). Only a class's own plain functions are reported: not `static`, `native`, `exec`, `latent`, `iterator` or `singular` functions, events, delegates, operators, state functions, functions with no body, functions that override or are overridden (changing them would change the signature), replicated functions, or functions used as a value (assigned to a delegate). A function that calls a non-static function isn't reported, even one that could itself be `static`. A name that can't be looked up, because a parent isn't in the project, stops the function being reported. Needs the project, and is opt-in. |
 | S021 | `loop-runs-once` | Warning |  | A `for`, `while` or `do` loop whose body can never go round again, because every path through it returns or breaks: often a `return` that belongs after the loop. `foreach` isn't reported, as taking the first actor it finds is an idiom. |
+| S022 | `unchecked-spawn` | Warning |  | A variable assigned the result of `Spawn` or `DynamicLoadObject` (or a cast of one), then used (`A.X`, `A.F()`) on a path with no `None` check: they return `None` when they fail. An assignment, or a call it's given to, forgets it; a class variable is also forgotten at any call. Reported once per result. Opt-in, as most spawned actors don't collide and practically never fail, but needs no project. |
 
 ### Performance
 

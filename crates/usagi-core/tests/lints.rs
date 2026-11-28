@@ -2041,3 +2041,61 @@ fn loop_runs_once() {
         at(&[(1, "while")])
     );
 }
+
+#[test]
+fn unchecked_spawn() {
+    let s022 = |body: &str| {
+        found_in(
+            "S022",
+            "local Actor A;\nlocal class<Actor> C;\nlocal bool B;",
+            body,
+        )
+    };
+    assert_eq!(
+        s022(
+            "A = Spawn(class'Actor');\nA.Destroy();\n\
+             A = Level.Spawn(class'Actor');\nif (B) {}\nA.Destroy();\n\
+             C = class<Actor>(DynamicLoadObject(\"X.Y\", class'Class'));\nB = C.default.bHidden;\n\
+             Member = Spawn(class'Actor');\nMember.SetOwner(self);\n\
+             if (B) {} else A = Spawn(class'Actor');\nInit();\nA.Destroy();"
+        ),
+        at(&[(2, "A"), (5, "A"), (7, "C"), (9, "Member"), (12, "A")])
+    );
+    let found = found_by(
+        "S022",
+        "class Foo extends Actor;\nfunction F() { local Actor A; A = Spawn(class'Actor'); A.Destroy(); }\n",
+    );
+    assert_eq!(found.len(), 1);
+    let source = "class Foo extends Actor;\nfunction F() { local Actor A; A = Spawn(class'Actor'); A.Destroy(); }\n";
+    let message = &parse_program(source).unwrap().errors[0].message;
+    assert_eq!(
+        message,
+        "`A` may be `None` here: `Spawn` returns `None` when it fails, and nothing checks for that"
+    );
+    // Checked, reassigned, or changed by a call.
+    assert!(
+        s022(
+            "A = Spawn(class'Actor');\nif (A != None) A.Destroy();\n\
+             A = Spawn(class'Actor');\nif (A == None) return;\nA.Destroy();\n\
+             A = Spawn(class'Actor');\nA = P;\nA.Destroy();\n\
+             A = Spawn(class'Actor');\nSetA(A);\nA.Destroy();\n\
+             A = Spawn(class'Actor');\nA.Destroy();\nA.Destroy();\n\
+             Member = Spawn(class'Actor');\nInit();\nMember.Destroy();\n\
+             A = Pick(Spawn(class'Actor'), P);\nA.Destroy();\n\
+             A = Other()(Spawn(class'Actor'));\nA.Destroy();\n\
+             A = F2();\nA.Destroy();"
+        )
+        .iter()
+        .map(|(l, _)| *l)
+        .eq([13])
+    );
+}
+
+#[test]
+fn opt_in_lints_that_need_no_project() {
+    let spawn = Lint::UncheckedSpawn;
+    assert!(spawn.is_opt_in() && !spawn.needs_project());
+    assert!(!LintSelection::default().is_enabled(spawn));
+    assert!(!LintSelection::new(["ALL", "S"], []).is_enabled(spawn));
+    assert!(LintSelection::new(["S022"], []).is_enabled(spawn));
+}

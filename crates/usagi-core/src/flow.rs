@@ -6,6 +6,8 @@
 //!   `unassigned-object-local`;
 //! - which locals and arguments are known to be `None`, from a comparison
 //!   with `None` or an assignment of it, for C021 `known-none-access`;
+//! - which variables may hold an unchecked result of `Spawn` or
+//!   `DynamicLoadObject`, for S022 `unchecked-spawn`;
 //! - and whether a loop can go round again, for S021 `loop-runs-once`.
 //!
 //! The pass knows the file and nothing else, so a call that a local is given
@@ -65,6 +67,9 @@ struct State {
     pending: BTreeMap<SymbolId, BTreeSet<usize>>,
     /// The locals and arguments known to be `None`.
     none: BTreeSet<SymbolId>,
+    /// The variables that may hold an unchecked result of a function that
+    /// can fail, with its name.
+    unchecked: BTreeMap<SymbolId, Identifier>,
 }
 
 impl State {
@@ -96,6 +101,11 @@ impl State {
                 .extend(calls.iter().copied());
         }
         self.none.retain(|symbol| other.none.contains(symbol));
+        for (symbol, source) in &other.unchecked {
+            self.unchecked
+                .entry(*symbol)
+                .or_insert_with(|| source.clone());
+        }
     }
 
     fn joined(mut self, other: &State) -> State {
@@ -106,6 +116,7 @@ impl State {
     /// Forgets what's known of `symbol`'s value, when something may change it.
     fn forget(&mut self, symbol: SymbolId) {
         self.none.remove(&symbol);
+        self.unchecked.remove(&symbol);
     }
 }
 
@@ -118,6 +129,9 @@ struct Jumps {
     /// it.
     is_loop: bool,
 }
+
+/// Functions whose result is `None` when they fail.
+const FALLIBLE: &[&str] = &["Spawn", "DynamicLoadObject"];
 
 struct Flow<'t> {
     table: &'t SymbolTable,
@@ -224,6 +238,29 @@ fn is_none_literal(expression: &AstNode<Expression>) -> bool {
         Expression::Literal(literal) if matches!(literal.data, Literal::None))
 }
 
+/// The function that can fail whose result `expression` is: a call of it,
+/// or a cast of one (`Pawn(Spawn(...))`).
+fn fallible(expression: &AstNode<Expression>) -> Option<&Identifier> {
+    let (operand, arguments) = match &unparenthesize(expression).data {
+        Expression::Call { operand, arguments } => (operand, arguments),
+        // `class<Pawn>(...)`.
+        Expression::Cast { operand, .. } => return fallible(operand),
+        _ => return None,
+    };
+    let name = match &unparenthesize(operand).data {
+        Expression::Identifier(name) => name,
+        Expression::MemberAccess { target, .. } => &target.data,
+        _ => return None,
+    };
+    if FALLIBLE.iter().any(|f| name.eq_ignore_ascii_case(f)) {
+        return Some(name);
+    }
+    match arguments.expressions.as_slice() {
+        [Some(argument)] => fallible(argument),
+        _ => None,
+    }
+}
+
 /// The span of a loop's keyword, where the problem is reported.
 fn keyword_span(statement: &AstNode<CodeStatement>, keyword: &str) -> AstSpan {
     AstSpan {
@@ -293,14 +330,15 @@ impl Flow<'_> {
         self.reads.insert(span.start, finding);
     }
 
-    /// `symbol` is assigned something other than `None`.
+    /// `symbol` is assigned something other than `None` or a result that can
+    /// fail.
     fn assign(&mut self, symbol: SymbolId) {
         self.state.assigned.insert(symbol);
         self.state.forget(symbol);
     }
 
     /// The object in `operand` is used (`operand.X`, `operand.default.X`):
-    /// reports it if it's known to be `None`.
+    /// reports it if it's known to be `None`, or may be an unchecked result.
     fn dereference(&mut self, operand: &AstNode<Expression>) {
         self.expression(operand);
         let Some(symbol) = self.variable(operand) else {
@@ -312,12 +350,28 @@ impl Flow<'_> {
         let name = self.table.symbol(symbol).name.as_str();
         let span = unparenthesize(operand).span;
         // A use doesn't change what's known to be `None`, so each use is
-        // reported.
-        let problem = self.state.none.contains(&symbol).then(|| FlowProblem {
-            lint: Lint::KnownNoneAccess,
-            message: format!("`{}` is `None` here, so using it is an Accessed None", name),
-            span,
-        });
+        // reported; an unchecked result is reported at its first use.
+        let problem = if self.state.none.contains(&symbol) {
+            Some(FlowProblem {
+                lint: Lint::KnownNoneAccess,
+                message: format!("`{}` is `None` here, so using it is an Accessed None", name),
+                span,
+            })
+        } else {
+            self.state
+                .unchecked
+                .remove(&symbol)
+                .map(|source| FlowProblem {
+                    lint: Lint::UncheckedSpawn,
+                    message: format!(
+                        "`{}` may be `None` here: `{}` returns `None` when it fails, \
+                     and nothing checks for that",
+                        name,
+                        source.as_str()
+                    ),
+                    span,
+                })
+        };
         self.problems.insert(span.start, problem);
     }
 
@@ -601,6 +655,8 @@ impl Flow<'_> {
                 Some((symbol, equal, lhs, rhs)) => {
                     self.expression(lhs);
                     self.expression(rhs);
+                    // Either way, it's been checked.
+                    self.state.unchecked.remove(&symbol);
                     let mut is_none = self.state.clone();
                     let mut is_not = self.state.clone();
                     if self.is_local_or_argument(symbol) && is_none.reachable {
@@ -666,12 +722,12 @@ impl Flow<'_> {
                     Some(symbol) => {
                         self.expression(rhs);
                         self.assign(symbol);
-                        if *verb == DyadicVerb::Assign
-                            && self.state.reachable
-                            && is_none_literal(rhs)
-                            && self.is_local_or_argument(symbol)
-                        {
-                            self.state.none.insert(symbol);
+                        if *verb == DyadicVerb::Assign && self.state.reachable {
+                            if is_none_literal(rhs) && self.is_local_or_argument(symbol) {
+                                self.state.none.insert(symbol);
+                            } else if let Some(source) = fallible(rhs) {
+                                self.state.unchecked.insert(symbol, source.clone());
+                            }
                         }
                     }
                     // `X.Y = ...` uses `X`.
@@ -723,7 +779,8 @@ impl Flow<'_> {
     }
 
     /// A call's arguments. A local given as an argument is read unless the
-    /// argument is `out`, and is assigned afterwards if it is.
+    /// argument is `out`, and is assigned afterwards if it is. The call may
+    /// change any class variable.
     fn call_arguments(&mut self, callee: &Operand, arguments: &AstNode<ExpressionList>) {
         let mut given = Vec::new();
         for (i, argument) in arguments.expressions.iter().enumerate() {
@@ -742,5 +799,9 @@ impl Flow<'_> {
             self.state.pending.entry(symbol).or_default().insert(id);
             self.state.forget(symbol);
         }
+        let table = self.table;
+        self.state
+            .unchecked
+            .retain(|&symbol, _| !matches!(table.symbol(symbol).kind, SymbolKind::Variable { .. }));
     }
 }
