@@ -129,6 +129,7 @@ macro_rules! lints {
                     Lint::UndeclaredDefaultProperty
                         | Lint::NonExhaustiveSwitch
                         | Lint::CouldBeStatic
+                        | Lint::ActorReferenceInObject
                 )
             }
 
@@ -176,6 +177,8 @@ lints! {
         "The class name differs from the name of its `.uc` file."),
     UndeclaredDefaultProperty = ("C017", "undeclared-default-property", Correctness, Warning, Never,
         "A `defaultproperties` property that no class in the hierarchy declares. Opt-in."),
+    ActorReferenceInObject = ("C018", "actor-reference-in-object", Correctness, Error, Never,
+        "A variable of a class that isn't an `Actor` holds a reference to an `Actor`. Opt-in."),
 
     // Suspicious
     EmptyBody = ("S001", "empty-body", Suspicious, Warning, Never,

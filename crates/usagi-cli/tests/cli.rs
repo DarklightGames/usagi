@@ -460,6 +460,36 @@ fn could_be_static_is_opt_in() {
 }
 
 #[test]
+fn lint_reports_actor_references_in_objects() {
+    let dir = project(&[
+        ("Core/Classes/Object.uc", "class Object;\n"),
+        (
+            "Engine/Classes/Actor.uc",
+            "class Actor extends Object;\nvar Actor Owner;\n",
+        ),
+        (
+            "Mod/Classes/BarObject.uc",
+            "class BarObject extends Object;\nvar Actor MyCoolFoo;\n",
+        ),
+    ]);
+    let run = |args: &[&str]| {
+        let output = usagi(dir.path())
+            .args(["lint", "--format", "concise"])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert_eq!(run(&["--select", "ALL"]), "");
+    assert_eq!(
+        run(&["--select", "actor-reference-in-object"]),
+        "Mod/Classes/BarObject.uc:2:11: C018 `MyCoolFoo` in `BarObject`, which isn't an actor, \
+         holds a reference to an actor (`Actor`): the garbage collector can crash the game on it\n"
+    );
+    assert_eq!(run(&["--select", "C018", "--no-project"]), "");
+}
+
+#[test]
 fn undeclared_default_properties_by_configuration() {
     let dir = project(&[
         (

@@ -527,3 +527,141 @@ fn could_be_static_needs_the_whole_chain() {
     let quiet = "class Q extends Object;\n// usagi: ignore[S019]\nfunction F() {}\n";
     assert!(statics(&[OBJECT, quiet]).is_empty());
 }
+
+/// The `(name, message)` of each C018 problem in the class named `class`.
+fn actor_references(p: &Project, class: &str) -> Vec<(String, String)> {
+    let class = p.class(class).unwrap();
+    let table = p.table(class);
+    project_lint::check(p, class)
+        .into_iter()
+        .filter(|e| e.lint == Some(Lint::ActorReferenceInObject))
+        .map(|e| {
+            assert_eq!(e.severity, Lint::ActorReferenceInObject.severity());
+            let name = table
+                .iter()
+                .find(|(_, s)| s.span.start == e.span.start)
+                .map(|(_, s)| s.name.as_str().to_string())
+                .expect("the span is a variable's");
+            (name, e.message)
+        })
+        .collect()
+}
+
+fn names(found: Vec<(String, String)>) -> Vec<String> {
+    found.into_iter().map(|(name, _)| name).collect()
+}
+
+const FOO_ACTOR: &str = "class FooActor extends Actor;\n";
+
+#[test]
+fn an_object_that_holds_an_actor() {
+    let bar = "class BarObject extends Object;\n\
+        var FooActor MyCoolFoo;\n\
+        var Actor Plain, Second;\n\
+        var array<FooActor> Many;\n\
+        var FooActor Fixed[2];\n\
+        var array< array<Actor> > Nested;\n\
+        var class<FooActor> FooClass;\n\
+        var Object Other;\n\
+        var int Count;\n\
+        var EColor Color;\n\
+        var Unknown Mystery;\n\
+        function F() { local FooActor L; }\n";
+    let p = project(&[OBJECT, ACTOR, FOO_ACTOR, bar]);
+    let found = actor_references(&p, "BarObject");
+    assert_eq!(
+        found[0].1,
+        "`MyCoolFoo` in `BarObject`, which isn't an actor, holds a reference to an actor \
+         (`FooActor`): the garbage collector can crash the game on it"
+    );
+    assert_eq!(
+        names(found),
+        ["MyCoolFoo", "Plain", "Second", "Many", "Fixed", "Nested"]
+    );
+}
+
+#[test]
+fn an_actor_may_hold_an_actor() {
+    let p = project(&[
+        OBJECT,
+        ACTOR,
+        FOO_ACTOR,
+        "class Baz extends FooActor;\nvar Actor A;\n",
+    ]);
+    assert!(actor_references(&p, "Baz").is_empty());
+    // A class whose parents aren't all known may be an actor.
+    let p = project(&[
+        OBJECT,
+        ACTOR,
+        "class Orphan extends Missing;\nvar Actor A;\n",
+    ]);
+    assert!(actor_references(&p, "Orphan").is_empty());
+    // Without `Actor` in the project, nothing is an actor.
+    let p = project(&[OBJECT, "class Lone extends Object;\nvar Lone L;\n"]);
+    assert!(actor_references(&p, "Lone").is_empty());
+}
+
+#[test]
+fn an_actor_in_a_struct() {
+    let bar = "class BarObject extends Object;\n\
+        struct Inner { var int N; var FooActor Foo; };\n\
+        struct Outer { var float F; var array<Inner> Inners; };\n\
+        struct Safe { var int N; var enum ELocal { L_A } E; };\n\
+        struct Loop1 { var Loop2 L; };\n\
+        struct Loop2 { var Loop1 L; var Safe S; };\n\
+        var Inner I;\n\
+        var Outer O;\n\
+        var Safe S;\n\
+        var Loop1 L;\n";
+    let p = project(&[OBJECT, ACTOR, FOO_ACTOR, bar]);
+    let found = actor_references(&p, "BarObject");
+    assert_eq!(names(found.clone()), ["I", "O"]);
+    assert!(found[1].1.contains("(`FooActor`) (through `Inners.Foo`)"));
+    // A struct declared in a parent class.
+    let p = project(&[
+        OBJECT,
+        ACTOR,
+        FOO_ACTOR,
+        bar,
+        "class Sub extends BarObject;\nvar Inner I;\n",
+    ]);
+    assert_eq!(names(actor_references(&p, "Sub")), ["I"]);
+}
+
+#[test]
+fn the_engines_actor_is_preferred() {
+    let file = |package: &str, path: &str, source: &str| {
+        let origin = Origin {
+            root: 0,
+            package: Some(package.to_string()),
+            path: PathBuf::from(path),
+        };
+        (origin, parse_program(source).unwrap().symbols)
+    };
+    let p = Project::build(vec![
+        file("Core", "a.uc", OBJECT),
+        // A class named `Actor` in another package, found first.
+        file("Aaa", "b.uc", "class Actor extends Object;\n"),
+        file("Engine", "c.uc", ACTOR),
+        file(
+            "Mod",
+            "d.uc",
+            "class Bar extends Object;\nvar Engine.Actor A;\nvar Aaa.Actor B;\n",
+        ),
+    ]);
+    assert_eq!(names(actor_references(&p, "Bar")), ["A"]);
+}
+
+#[test]
+fn an_actor_reference_can_be_suppressed() {
+    let bar = "class BarObject extends Object;\n\
+        var Actor A; // usagi: ignore[C018]\n\
+        var Actor B;\n";
+    let p = project(&[OBJECT, ACTOR, bar]);
+    let class = p.class("BarObject").unwrap();
+    let lines: Vec<usize> = project_lint::lint(&p, class, bar)
+        .iter()
+        .map(|e| e.span.line.unwrap())
+        .collect();
+    assert_eq!(lines, [3]);
+}

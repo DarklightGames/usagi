@@ -87,7 +87,8 @@ A file's package is the folder that holds its `Classes` folder
 a class of any package.
 
 The index is also built when a lint that looks at other classes is selected
-(`C017 undeclared-default-property`, `S018 non-exhaustive-switch`, `S019 could-be-static`). Those lints are **opt-in**: only a
+(`C017 undeclared-default-property`, `C018 actor-reference-in-object`,
+`S018 non-exhaustive-switch`, `S019 could-be-static`). Those lints are **opt-in**: only a
 selector that names one, by its code or its name, selects it, so `ALL`, `C` and
 `correctness` don't. Select one with `--select C017` or `--extend-select C017`,
 or `extend-select = ["C017"]` in `usagi.toml` (also in a `lint.per-path` entry).

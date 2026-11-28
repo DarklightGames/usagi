@@ -152,6 +152,7 @@ never applied from the command line; they are for an editor to offer.
 | C015 | `return-form-mismatch` | Error |  | `return X;` in a function with no return type, or a bare `return;` in a function that has one. |
 | C016 | `class-name-mismatch` | Error |  | A class whose name differs from its file's name (without `.uc`), ignoring case. UCC rejects it. Only checked when linting files, since it needs the file name. |
 | C017 | `undeclared-default-property` | Warning |  | A property assigned in `defaultproperties` that the class doesn't declare, or any class it extends. Needs the project, and is opt-in. Only reported when every parent of the class is in the project. `Begin Object` blocks aren't checked, and neither are names that are declared but aren't variables (a `const`, an enum value). |
+| C018 | `actor-reference-in-object` | Error |  | A variable of a class that isn't an `Actor` subclass whose type is an `Actor` (or a subclass), an array of them, or a struct with such a member (however deep, through arrays and other structs). The garbage collector doesn't clear such a reference when the actor is destroyed, and the game can crash on it. `class<Actor>` variables are fine, and so are locals and arguments. `Actor` is `Engine.Actor`, or any class named `Actor` when packages aren't known. A struct's members inherited from a struct it `extends` aren't looked at. Needs the project, and is opt-in. Only reported when every parent of the class is in the project. |
 
 ### Suspicious
 

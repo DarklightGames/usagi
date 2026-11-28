@@ -118,7 +118,7 @@ pub enum Problem {
 }
 
 /// A declaration found by a lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Declaration {
     /// The class that declares it.
     pub class: ClassId,

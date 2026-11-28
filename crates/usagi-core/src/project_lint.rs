@@ -13,7 +13,7 @@ use crate::parser::ProgramError;
 use crate::project::Declaration;
 use crate::project::{ClassId, Lookup, Project};
 use crate::suppression::Suppressions;
-use crate::symbols::{Namespace, Operand, ReferenceKind, SymbolId, SymbolKind};
+use crate::symbols::{Namespace, Operand, ReferenceKind, ScopeKind, SymbolId, SymbolKind, TypeRef};
 use crate::typing;
 use crate::{LineIndex, source};
 use std::collections::HashSet;
@@ -44,6 +44,7 @@ pub fn check(project: &Project, class: ClassId) -> Vec<ProgramError> {
     undeclared_default_properties(project, class, &mut errors);
     non_exhaustive_switches(project, class, &mut errors);
     could_be_static(project, class, &mut errors);
+    actor_references_in_objects(project, class, &mut errors);
     errors
 }
 
@@ -258,6 +259,98 @@ fn could_be_static(project: &Project, class: ClassId, errors: &mut Vec<ProgramEr
             message: format!(
                 "`{}` doesn't use the object it's called on, and could be `static`",
                 symbol.name.as_str()
+            ),
+            span: symbol.span,
+            severity: lint.severity(),
+            lint: Some(lint),
+            fix: None,
+        });
+    }
+}
+
+/// The `Actor` class: `Engine.Actor`, or failing that (when packages aren't
+/// known) any class named `Actor`.
+fn actor_class(project: &Project) -> Option<ClassId> {
+    project
+        .class("Engine.Actor")
+        .or_else(|| project.class("Actor"))
+}
+
+/// How a type written in `class` holds a reference to an actor, if it does:
+/// the actor class it names, after the members of structs it goes through
+/// (`Inner.Pawn`, say). Arrays of either are looked through. `seen` holds the
+/// structs already looked into, so a struct is looked into once.
+fn actor_in_type(
+    project: &Project,
+    actor: ClassId,
+    class: ClassId,
+    type_: &TypeRef,
+    seen: &mut HashSet<Declaration>,
+) -> Option<(Vec<String>, ClassId)> {
+    let name = match type_ {
+        TypeRef::Array(inner) => return actor_in_type(project, actor, class, inner, seen),
+        TypeRef::Named(name) => name,
+        // `class<Actor>` is a reference to a class, which is never destroyed.
+        TypeRef::Pod(_) | TypeRef::Class(_) => return None,
+    };
+    if let Some(named) = project.class_from(class, name) {
+        return project
+            .is_subclass(named, actor)
+            .then(|| (Vec::new(), named));
+    }
+    let struct_ = project.resolve_type(class, name).found()?;
+    if !matches!(project.symbol(struct_).kind, SymbolKind::Struct) || !seen.insert(struct_) {
+        return None;
+    }
+    let table = project.table(struct_.class);
+    let scope = table
+        .scopes()
+        .find(|(_, scope)| scope.kind == ScopeKind::Struct(struct_.symbol))
+        .expect("a struct has a scope")
+        .1;
+    scope.symbols().iter().find_map(|&member| {
+        let symbol = table.symbol(member);
+        let type_ = symbol
+            .kind
+            .type_()
+            .expect("a struct scope declares only members");
+        let (mut path, found) = actor_in_type(project, actor, struct_.class, type_, seen)?;
+        path.insert(0, symbol.name.as_str().to_string());
+        Some((path, found))
+    })
+}
+
+fn actor_references_in_objects(project: &Project, class: ClassId, errors: &mut Vec<ProgramError>) {
+    let lint = Lint::ActorReferenceInObject;
+    let Some(actor) = actor_class(project) else {
+        return;
+    };
+    // A class whose parents aren't all known may be an actor.
+    if !project.is_complete(class) || project.is_subclass(class, actor) {
+        return;
+    }
+    let table = project.table(class);
+    for (_, symbol) in table.iter() {
+        let SymbolKind::Variable { type_, .. } = &symbol.kind else {
+            continue;
+        };
+        let Some((path, found)) = actor_in_type(project, actor, class, type_, &mut HashSet::new())
+        else {
+            continue;
+        };
+        let through = if path.is_empty() {
+            String::new()
+        } else {
+            format!(" (through `{}`)", path.join("."))
+        };
+        errors.push(ProgramError {
+            message: format!(
+                "`{}` in `{}`, which isn't an actor, holds a reference to an actor (`{}`){}: \
+                 the garbage collector can crash the game on it",
+                symbol.name.as_str(),
+                project.name(class),
+                project.name(found),
+                through,
             ),
             span: symbol.span,
             severity: lint.severity(),
