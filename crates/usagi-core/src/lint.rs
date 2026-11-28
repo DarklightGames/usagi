@@ -129,6 +129,7 @@ macro_rules! lints {
                         | Lint::ActorReferenceInObject
                         | Lint::UnassignedObjectLocal
                         | Lint::UnassignedBoolCondition
+                        | Lint::UnassignedOutArgument
                 )
             }
 
@@ -232,6 +233,8 @@ lints! {
         "A `switch` on an enum with no `default` that doesn't handle every value. Opt-in."),
     CouldBeStatic = ("S019", "could-be-static", Suspicious, Warning, Never,
         "A function that uses nothing of the object it's called on and could be `static`. Opt-in."),
+    UnassignedOutArgument = ("S020", "unassigned-out-argument", Suspicious, Warning, Never,
+        "An `out` argument that a function never uses. Opt-in."),
     LoopRunsOnce = ("S021", "loop-runs-once", Suspicious, Warning, Never,
         "A loop whose body always leaves it, so it never goes round again."),
     UncheckedSpawn = ("S022", "unchecked-spawn", Suspicious, Warning, Never,

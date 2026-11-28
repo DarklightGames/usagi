@@ -1090,3 +1090,48 @@ fn a_bool_local_tested_where_nothing_assigns_it() {
     // An object local isn't a `bool`, nor the other way round.
     assert!(problems_of(Lint::UnassignedObjectLocal, &[OBJECT, HELPERS, source]).is_empty());
 }
+
+const HOOKS: &str = "class Hooks extends Object;\n\
+    function Hook(out int X) {}\n\
+    function int Answer(out int X) { return 0; }\n\
+    function Overridden(out int X) { Log(1); }\n\
+    delegate OnEvent(out int X);\n";
+
+#[test]
+fn out_arguments_a_function_never_uses() {
+    let source = "class T extends Hooks;\n\
+        function Lost(out int Result, out int Used, int Plain) { Log(Plain); Used = 1; }\n\
+        function ReadOnly(out int X) { Log(X); }\n\
+        function Overridden(out int X) { Log(2); }\n\
+        event Fired(out int X) { Log(3); }\n\
+        function Handler(out int X) { Log(4); }\n\
+        function Coded(out int X) { Log(5); }\n\
+        function Inherited(out int X) { Log(6); }\n\
+        function Setup() { OnEvent = Coded; }\n\
+        state S { function InState(out int X) { Log(7); } }\n\
+        defaultproperties\n\
+        {\n\
+        \x20   OnEvent=Handler\n\
+        }\n";
+    let child = "class Child extends T;\ndefaultproperties\n{\n    OnEvent=Inherited\n}\n";
+    let p = project(&[OBJECT, HOOKS, source, child]);
+    let class = p.class("T").unwrap();
+    let errors: Vec<_> = project_lint::check(&p, class)
+        .into_iter()
+        .filter(|e| e.lint == Some(Lint::UnassignedOutArgument))
+        .collect();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0].message,
+        "`Result` is an `out` argument, but `Lost` never uses it"
+    );
+    // Hooks that do nothing, or only return a literal, are for overriding;
+    // without its override, `Overridden` is reported.
+    assert_eq!(
+        problems_of(Lint::UnassignedOutArgument, &[OBJECT, HOOKS]),
+        found(&[(4, "X")])
+    );
+    // A class whose parents aren't all known may override anything.
+    let orphan = "class Orphan extends Missing;\nfunction Lost(out int X) { Log(1); }\n";
+    assert!(problems_of(Lint::UnassignedOutArgument, &[OBJECT, orphan]).is_empty());
+}

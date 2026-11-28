@@ -2099,3 +2099,37 @@ fn opt_in_lints_that_need_no_project() {
     assert!(!LintSelection::new(["ALL", "S"], []).is_enabled(spawn));
     assert!(LintSelection::new(["S022"], []).is_enabled(spawn));
 }
+
+#[test]
+fn functions_assigned_in_defaultproperties_are_referred_to() {
+    // `OnClick=onclicked` uses the function, in a `Begin Object` block too.
+    let source = "class Foo extends Object;\n\
+        private function OnClicked() {}\n\
+        private function OnPressed() {}\n\
+        private function Unused() {}\n\
+        defaultproperties\n\
+        {\n\
+        \x20   OnClick=onclicked\n\
+        \x20   Begin Object Class=GUIButton Name=B\n\
+        \x20       OnPress=OnPressed\n\
+        \x20   End Object\n\
+        \x20   Other=ROLE_None\n\
+        \x20   Size=(X=1)\n\
+        \x20   Empty=\n\
+        }\n";
+    let result = parse_program(source).unwrap();
+    let codes: Vec<_> = result
+        .errors
+        .iter()
+        .filter_map(|e| e.lint.map(|l| (l.code(), e.span.line.unwrap())))
+        .filter(|(c, _)| matches!(*c, "R011" | "N006"))
+        .collect();
+    assert_eq!(codes, [("R011", 4), ("N006", 7)]);
+    let names: Vec<&str> = result
+        .symbols
+        .default_value_names()
+        .iter()
+        .map(|n| n.as_str())
+        .collect();
+    assert_eq!(names, ["onclicked", "OnPressed", "ROLE_None"]);
+}

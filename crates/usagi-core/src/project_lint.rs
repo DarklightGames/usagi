@@ -48,6 +48,7 @@ pub fn check(project: &Project, class: ClassId) -> Vec<ProgramError> {
     could_be_static(project, class, &mut errors);
     actor_references_in_objects(project, class, &mut errors);
     unassigned_object_locals(project, class, &mut errors);
+    unused_out_arguments(project, class, &mut errors);
     errors
 }
 
@@ -475,5 +476,78 @@ fn unassigned_object_locals(project: &Project, class: ClassId, errors: &mut Vec<
             lint: Some(lint),
             fix: None,
         });
+    }
+}
+
+/// Whether `name` is assigned to a delegate in the `defaultproperties` of
+/// `class` or a class that extends it.
+fn assigned_in_defaults(project: &Project, class: ClassId, name: &Identifier) -> bool {
+    project
+        .table(class)
+        .default_value_names()
+        .iter()
+        .any(|n| n == name)
+        || project
+            .children(class)
+            .iter()
+            .any(|&child| assigned_in_defaults(project, child, name))
+}
+
+/// S020: an `out` argument the function never uses, in a function whose
+/// signature is its own. One that overrides another or is overridden, an
+/// event or a delegate, or a function assigned to a delegate (in code or in
+/// `defaultproperties`) must keep the signature it has.
+fn unused_out_arguments(project: &Project, class: ClassId, errors: &mut Vec<ProgramError>) {
+    let lint = Lint::UnassignedOutArgument;
+    if !project.is_complete(class) {
+        return;
+    }
+    let table = project.table(class);
+    for (id, symbol) in table.iter() {
+        let SymbolKind::Function {
+            types,
+            has_body: true,
+            ..
+        } = &symbol.kind
+        else {
+            continue;
+        };
+        let declaration = Declaration { class, symbol: id };
+        if symbol.scope != crate::symbols::ScopeId::CLASS
+            || table.function_is_stub(id)
+            || assigned_in_defaults(project, class, &symbol.name)
+            || types != &[FunctionTypeType::Function]
+            || table
+                .references_to(id)
+                .any(|r| r.kind != ReferenceKind::Call)
+            || project.overridden(declaration).is_some()
+            || !project.overriders(declaration).is_empty()
+        {
+            continue;
+        }
+        let scope = table
+            .scope_of(symbol.span.start)
+            .expect("a function with a body has a scope");
+        for &argument in table.scope(scope).symbols() {
+            let SymbolKind::Argument { modifiers, .. } = &table.symbol(argument).kind else {
+                continue;
+            };
+            if !modifiers.contains(&FunctionArgumentModifier::Out)
+                || table.references_to(argument).next().is_some()
+            {
+                continue;
+            }
+            errors.push(ProgramError {
+                message: format!(
+                    "`{}` is an `out` argument, but `{}` never uses it",
+                    table.symbol(argument).name.as_str(),
+                    symbol.name.as_str()
+                ),
+                span: table.symbol(argument).span,
+                severity: lint.severity(),
+                lint: Some(lint),
+                fix: None,
+            });
+        }
     }
 }

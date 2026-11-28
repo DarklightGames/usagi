@@ -44,6 +44,11 @@ Done (steps 0 to 4, the graph of 6 and the first typing of 7, of [Order of work]
   in conditions. The pass also finds, by itself and per file, C021
   `known-none-access`, S021 `loop-runs-once` and S022 `unchecked-spawn`
   (`SymbolTable::flow_problems`, reported by the visitor).
+- S020 `unassigned-out-argument`, from the references the table keeps, with
+  functions named as values in `defaultproperties` counted as references
+  (`SymbolTable::default_value_names` keeps the names, for subclasses that
+  assign an inherited function to a delegate), and the overrides the project
+  knows.
 - Minimal typing, and the lint that needed it: S018 `non-exhaustive-switch`,
   opt-in (steps 4d and 7, in part). The symbol table records each `switch`
   (its subject and `case` labels as `Operand`s, names that can be looked up
